@@ -2,7 +2,7 @@
 
 = Introduction =
 
-This wiki page describes the "preferred" directory structure when working with the efr-tools. This structure has a lot of historical background, but it has proven useful across the years.  It attempts to separate the common code from the code that is specific to applications, and to make sure most libraries end up in the common code so that they can be reused.
+This wiki page describes the "preferred" directory structure when working with the efr-tools. This structure has a lot of historical background, but it has proven useful across the years.  It attempts to separate the common code from the code that is specific to applications, and to make sure most libraries end up in the common code so that they can be reused. This structuring easily adapts to code migration between machines and operating systems.
 
 
 = Linking =
@@ -45,4 +45,23 @@ Each project (the definition is vague!) finds its home in a directory that conta
   * A {{{lib}}} directory contains all libraries that are necessary to run the project. The content of this directory contains either libraries that are project specific, each in its own directory or links into the directories of the [DirectoryStructure#Common_Code]. These links are created automatically as described below.
   * A {{{make}}} directory contains small scripts to create the links and to make the binaries, i.e. generate the Windows executable for those projects.
 
- 
+The {{{make}}} directory always contains a script that I copy (and adapt) from one project to the next and which aims at creating all the links and copy all the necessary code for successful projects. An example of this script is [http://code.google.com/p/efr-tools/source/browse/trunk/apps/cxManager/make/makelinks.tcl contained] in the directory for the context manager.  The code creates links from all relevant directories into the {{{lib}}} directory of the project.  It also copies {{{bootstrap.tcl}}} and {{{init.tcl}}}, two files that are included at the beginning of each main script placed under the main project directory.  The {{{make}}} directory also contains a number of rules to create the "binaries" of the application.  The initialisation files have the following goals:
+
+  * [http://code.google.com/p/efr-tools/source/browse/trunk/efr-lib/bootstrap.tcl bootstrap.tcl] arranges to access {{{argutil.tcl}}} an initialisation file that is required for all {{{til}}}-based projects.  Since the {{{til}}} is usually placed in a directory that is linked from the project, {{{bootstrap.tcl}}} contains a simplified version of the Windows {{{.lnk}}} files.
+  * [http://code.google.com/p/efr-tools/source/browse/trunk/efr-lib/init.tcl init.tcl] does a whole lot of program/script initialisation. It provides a number of facilities that are common to be performed at the beginning of a script. These are:
+    * A number of common options to set verbosity level, to read program arguments and options from local files and remote locations, to connect to the program using [http://tkcon.sourceforge.net/ tkcon] (via the services of [http://www2.tcl.tk/14701 tkconclient]), to set the language of the application and to set its version number.
+    * Access to the top directory in a wrap-agnostic manner.
+    * Services to select the localisation files to use for the application.
+    * A generic program start routine that have support for a splash-screen (on Tk), options parsing and overriding, a callback system for following the initialisation, the access to linked directories (on Windows), the loading of a series of packages, but also libraries written using the conventions of the {{{til}}}, etc.  
+
+== Migration ==
+
+I migrate between machines and operating systems on a daily basis. To migrate I use a memory stick containing the main copy of all my projects. 
+  * On Windows, I keep the content of the memory stick and of the hard drive in sync using [http://www.2brightsparks.com/freeware/freeware-hub.html SyncBack].
+  * On Linux, I keep the content of the memory stick and of the hard drive in sync using [http://wellhoefer.info/usbsync/ usbsync].
+
+A side-effect of this migration is that I get backup for free, or almost. I always have a computer, somewhere with a fairly recent copy of my work. Sometimes it is a few days old, but never much more.
+
+= Conclusion =
+
+This document contains a number of conventions for arranging and structuring files when working with Tcl-projects of fairly decent size. At the core of these working practices is the use a central repository of reusable code, a repository that is linked into the {{{lib}}} directory of each project. On Windows, these links are implemented using {{{.lnk}}} files; on other platforms, using symbolic links.
