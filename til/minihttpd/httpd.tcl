@@ -102,7 +102,7 @@ proc ::minihttpd::loglevel { { loglvl "" } } {
 #	-dirlist (list of patterns for which directory listing is
 #	allowed when the default file does not exist (expressed in
 #	server file space)) -pki followed by a list of two file path
-#	(can be reslolved) with a public and private key to associate
+#	(can be resolved) with a public and private key to associate
 #	to the server, thus making it run over HTTPS instead of
 #	HTTP. -authorization contains details for Basic authentication
 #	protection.  This is a list of triplets where the first
@@ -148,7 +148,7 @@ proc ::minihttpd::new {root port args} {
     # a bit strange, but will do as long as we remember that we have
     # done so.
     set proto "http"
-    set socket_cmd "socket"
+    set socket_cmd "::socket"
     foreach {opt arg} $args {
 	if { [string match -nocase -pki $opt] && $arg != "" } {
 	    # Lazy require TLS package to make sure we can run the
@@ -170,9 +170,25 @@ proc ::minihttpd::new {root port args} {
 		return -1
 	    }
 	    # Now initialise and make sure we remember that we are
-	    # running https instead of http on that port.
-	    tls::init -certfile $certfile -keyfile $keyfile \
-		-ssl2 1 -ssl3 1 -tls1 0 -require 0 -request 0
+	    # running https instead of http on that port.  Support as
+	    # many protocols as possible to make sure we can serve as
+	    # most clients as possible, even though we know sslv2 has
+	    # some vulnerability issues.
+	    foreach proto {ssl2 ssl3 tls1} {
+		if { [catch {::tls::ciphers $proto} ciphers] } {
+		    ::tls::init -$proto 0
+		    ${log}::warn "No support for $proto under HTTPS"
+		} else {
+		    if { [llength $ciphers] > 0 } {
+			::tls::init -$proto 1
+			${log}::notice "HTTPS will have support for $proto"
+		    } else {
+			::tls::init -$proto 0
+			${log}::warn "No support for $proto under HTTPS"
+		    }
+		}
+	    }
+	    ::tls::init -certfile $certfile -keyfile $keyfile
 	    set proto "https"
 	    set socket_cmd ::tls::socket
 	}
@@ -182,10 +198,11 @@ proc ::minihttpd::new {root port args} {
     # we start listening on that port (there could be some other
     # process serving that port already).
     if { $port > 0 } {
-	if { [catch {$socket_cmd \
-			 -server [list ::minihttpd::__accept $port]\
-			 $port} \
+	if { [catch {eval [list $socket_cmd \
+			       -server [list ::minihttpd::__accept $port]\
+			       $port]} \
 		  sock] } {
+	    puts $::errorInfo
 	    ${log}::warn "Cannot serve on $port: $sock"
 	    return -1
 	}
