@@ -30,6 +30,7 @@ namespace eval ::argutil {
 	    extlog      ""
 	    outfailed   0
 	    vbs         "lnk2path.vbs"
+	    links_cache {}
 	    -maxlinks   10
 	    -autounwrap on
 	    -tmpmake    32767
@@ -46,8 +47,10 @@ namespace eval ::argutil {
 # ::argutil::readlnk -- Read the target of a windows shell link
 #
 #       This command command uses tcom (if possible) or an homebrew
-#       solution to attempt reading the content of a windows shell link and
-#       returns the target.
+#       solution to attempt reading the content of a windows shell
+#       link and returns the target.  The command uses a cache since
+#       it is very likely that links are read and requested several
+#       times under program initialisation.
 #
 # Arguments:
 #	lnk	Path to shell link
@@ -60,6 +63,13 @@ namespace eval ::argutil {
 proc ::argutil::readlnk { lnk } {
     variable libdir
     variable AU
+
+    # Find link in cache, if possible
+    foreach {l tgt} $AU(links_cache) {
+	if { $l == $lnk } {
+	    return $tgt
+	}
+    }
 
     if { ![file exists $lnk] } {
 	__log warn "'$lnk' is not an accessible file"
@@ -74,6 +84,7 @@ proc ::argutil::readlnk { lnk } {
 	set tgt [$lobj TargetPath]
 	__log info "'$lnk' points to '$tgt'"
 	if { $tgt ne "" } {
+	    lappend AU(links_cache) $lnk $tgt
 	    return $tgt
 	}
     } else {
@@ -88,8 +99,9 @@ proc ::argutil::readlnk { lnk } {
 	set fl [open $cmd]
 	set tgt [read $fl]
 	if { [catch {close $fl} err] } {
-	    log error "Could not read content of link: $lnk"
+	    __log error "Could not read content of link: $lnk"
 	} else {
+	    lappend AU(links_cache) $lnk $tgt
 	    set tgt [string trim $tgt]
 	}
     }
@@ -102,6 +114,7 @@ proc ::argutil::readlnk { lnk } {
 	    if { $snip ne "" && [file exists $abssnip]} {
 		__log info "'$abssnip' found in '$lnk', using it as the link!"
 		set tgt $snip
+		lappend AU(links_cache) $lnk $tgt
 		break
 	    }
 	}
