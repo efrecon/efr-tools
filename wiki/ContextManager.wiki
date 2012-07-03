@@ -1,4 +1,6 @@
-#an IoT hub for sensors, actuators and cloud services
+#summary an IoT hub for sensors, actuators and cloud services
+
+<wiki:toc max_depth="3" />
 
 = Introduction =
 
@@ -24,3 +26,206 @@ The context engine provides the following set of functionality:
   * On top of the plugin system, the context engine provides the concept of “conduits” that are logical entities connected to external web services and will direct data into or from the model depending on a number of conditions. Typically, conduits will perform some transformation on the data to or from the external web service, while also retaining data that is specific to the remote service, e.g. login credentials, authorisation details, session information, etc.
 
 The figure below describes a schematic description of the context engine. Note that the figure shows both conduits and hooks to help understanding the general design. However, access to external services and database services are described in more details in the remainder of this document.
+
+http://efr-tools.googlecode.com/svn/wiki/contextManager.png
+
+== Startup ==
+On start up, the context engine performs the following operations in sequence:
+  * The context engine starts a (preferably secured) web server with the proper credentials and proper encryption settings.
+  * The web server exposes the schema and model that will define the context of the building or the house that the engine is controlling and modelling.
+  * It reads the schema that will describe what classes of objects are allowed to appear in the context. This includes possible access to remote schemas that might be included from the main schema. Reading of the main schema might be through accessing the internal web service if necessary.
+  * It will then read the model that describes the particular building that it is modelling and controlling. All constraints implied by the schema that has just been read will be applied as the model is being read.
+  * All objects instantiated as part of the model are bound to the noSQL engine so that further write operations will automatically lead to new versions of the object being stored and so that later get operations will be able to get older data, whenever  possible.
+  * It will initialise all conduits that are accessible to this context engine. Conduits are conceptually separated from the remaining of the code and are plugins communicating with the remaining of the context engine through a tiny and well-defined (internal) API.
+  * It will read an initial “pairing” state that is used to initialise a number of conduits and to bind a number of objects to remote services. Pairing is explained later and mostly a helper functionality that aims at reinitialising the context engine every time that it starts and reaching a similar functioning state.
+
+
+== Formats ==
+=== Schema ===
+The context engine should provide techniques to specify the schema that will be used to describe the context itself. A key requirement to the provision of this schema is that it should be easily approachable not only by IT specialists, but also by less-knowledgeable people. To this end the schema brings in object-orientation concepts but simplifies them to their outermost. For example, provides simple inheritance and mixes both object field specifications and inheritance. The schema does not provide concepts such as private variables or similar, once again for the sake of simplification.
+
+Below is a cut-down example of a schema, providing a flavour of how a schema would look and feel like. A longer example is part of the [http://code.google.com/p/efr-tools/source/browse/trunk/apps/cxManager/models/model.sha code]. Roughly, this example schema divides the space into a number of possible floors and rooms within a building, and enables each part of the space to carry a number of devices. The example sports a single type of device, namely a thermometer, which demonstrates the (definition and) use of constraints to provide for a richer expression of units and properties of the physical world.
+
+{{{
+Space {
+  name String
+  contains Space[]
+  devices Device[]
+  Outside {
+  }
+  Building {
+    address Address
+    pos Coordinate
+  }
+  Apartment {
+    number Integer
+  }
+  Floor {
+    above Floor
+    below Floor
+  }
+  Room {
+    Kitchen {
+    }
+    Bedroom {
+    }
+    Office {
+    }
+    Bathroom {
+    }
+  }
+}
+
+Address {
+  street String
+  streetNumber Integer
+  areaCode Integer
+  city String
+  country String
+}
+
+Coordinate {
+  latitude Float
+  longitude Float
+}
+
+Temperature:Float {
+  intervals {[-273.15,[}
+  unit "celsius"
+}
+
+Device {
+  name String
+  PhysicalDevice {
+    SensorDevice {
+      Weather {
+        Thermometer {
+          value Temperature
+        }
+      }
+    }
+  }
+}
+}}}
+
+
+Six ground types were isolated from which all other types (constraints and class definitions) will be defined. The ground types are:
+  * Integer
+  * Float
+  * Boolean. Allowed values for a Boolean are false, true, on, off, 0 (off) and any other integer (on).
+  * String
+  * Timestamp as specified in [http://datatracker.ietf.org/doc/rfc3339/ RFC 3339].
+  * UUID (Universally Unique Identifiers) as specified in [http://datatracker.ietf.org/doc/rfc4122/ RFC 4122]
+
+Constraints offer the ability to extend ground types and constrain their values. Embedded in constraints is also the unit of the value that will be stored in the context, which allows to quickly describe constraints that are more “talkative” and easier to read when instantiating object. For example, “Temperature” or “Longitude” carries more semantics than just a “Float. The unit itself is described according to the naming conventions of the International System of Units as specified by the BIPM.
+
+Below is BNF representation of the complete grammar that schema specification should support. The grammar is defined according to the syntax specified in [http://datatracker.ietf.org/doc/rfc2234/ RFC 2234].
+
+{{{
+sign = "+" / "-"
+float = [sign] 1*DIGIT ["." 1*DIGIT]
+integer = [sign] 1*DIGIT
+timestamp = <A timestamp as defined in RFC3339>
+boolean = "on" / "off" / "true" / "false" / integer
+string = *VCHAR
+ground-unit = "meter" / "m"
+ground-unit /= "metre"
+ground-unit /= "gramme" / "g"
+ground-unit /= "second" / "s"
+ground-unit /= "ampere" / "A"
+ground-unit /= "kelvin" / "K"
+ground-unit /= "mole" / "mol"
+ground-unit /= "candle" / "cd"
+ground-unit /= "radian" / "rad"
+ground-unit /= "steradian" / "sr"
+ground-unit /= "hertz" / "Hz"
+ground-unit /= "newton" / "N"
+ground-unit /= "pascal" / "Pa"
+ground-unit /= "joule" / "J"
+ground-unit /= "watt" / "W"
+ground-unit /= "celsius" / "°C"
+ground-unit /= "coulomb" / "C"
+ground-unit /= "volt" / "V"
+ground-unit /= "ohm" / "Ω"
+ground-unit /= "siemens" / "S"
+ground-unit /= "farad" / "F"
+ground-unit /= "henry" / "H"
+ground-unit /= "weber" / "Wb"
+ground-unit /= "tesla" / "T"
+ground-unit /= "lumen" / "lm"
+ground-unit /= "lux" / "lx"
+ground-unit /= "dioptry"
+ground-unit /= "becquerel" / "Bq"
+ground-unit /= "gray" / "Gy"
+ground-unit /= "sievert" / "Sv"
+ground-unit /= "katal" / "kat"
+ground-unit /= "minute" / "min"
+ground-unit /= "hour" / "h"
+ground-unit /= "day" / "d"
+ground-unit /= "liter" / "L" / "l" / "litre"
+prefix-unit = "yotta" / "Y"
+prefix-unit /= "zetta" / "Z"
+prefix-unit /= "exa" / "E"
+prefix-unit /= "peta" / "P"
+prefix-unit /= "tera" / "T"
+prefix-unit /= "giga" / "G"
+prefix-unit /= "mega" / "M"
+prefix-unit /= "kilo" / "k"
+prefix-unit /= "hecto" / "h"
+prefix-unit /= "deca" / "da"
+prefix-unit /= "deci" / "d"
+prefix-unit /= "centi" / "c"
+prefix-unit /= "milli" / "m"
+prefix-unit /= "micro" / "μ"
+prefix-unit /= "nano" / "n"
+prefix-unit /= "pico" / "p"
+prefix-unit /= "femto" / "f"
+prefix-unit /= "atto" / "a"
+prefix-unit /= "zepto" / "z"
+prefix-unit /= "yocto" / "y"
+unit-name = prefix-unit ground-unit
+system-type = "Float"
+system-type /= "Integer"
+system-type /= "Timestamp"
+system-type /= "Boolean"
+system-type /= "String"
+uppercase = "A"-"Z"
+constraint-name = uppercase 1*ALPHA
+constraint-def = constraint-name ":" system-type LWSP
+                  "{" LWSP *constraint-spec LWSP "}"
+constraint-switch = "oneOf" / "switch"
+constraint-interval = "intervals"
+constraint-value = float / integer / timestamp / boolean / string
+constraint-switch-spec = constraint-switch LWSP
+                            "{" LWSP constraint-value
+                                *(LWSP constraint-value) 1*LWSP "}"
+constraint-unit-spec = "unit" LWSP DQUOTE unit-name DQUOTE
+constraint-interval = ("[" / "]") *1constraint-value
+                        , *1constraint-value ("[" / "]")
+constraint-interval-spec = "intervals" LWSP
+                           "{" LWSP constraint-interval
+                           *(LWSP constraint-interval) 1*LWSP "}"
+constraint-spec = constraint-switch-spec
+constraint-spec /= constraint-interval-spec
+constraint-spec /= constraint-unit-spec
+lowercase = "a"-"z"
+class-name = uppercase 1*ALPHA
+field-name = lowercase 1*ALPHA
+field-spec = field-name LWSP (system-type / class-name) *1("[]")
+class-spec = class-name LWSP "{" *(class-spec / field-spec) "}"
+uri = <a URI as described in RFC 39864>
+inclusion-spec = “INCLUDE” LWSP DQUOTE uri DQUOTE
+comment = “#” *VCHAR (CR/CRLF/LF)
+empty-line = WSP (CR/CRLF/LF)
+schema = *(class-spec / constraint-spec / inclusion-spec / comment /
+           empty-line)
+}}}
+
+To simplify the approach by non-technical experts, no forward declaration of classes or constraints is necessary. All new “types” that are discovered will be understood as (empty) classes as a start and converted when their real definition occurs. While this has the drawback of more complicated parsing and the possibility of duplicates or of unknown state (what to do when a class with a given name is then specified as a constraint under the same name), these problems are considered minor compared to the necessity to think about forward declaring classes or constraints to be able to use them.
+
+Implementation of the schema is found in the [http://code.google.com/p/efr-tools/source/browse/#svn%2Ftrunk%2Fapps%2FcxManager%2Flib%2Fschema schema package].
+
+=== Model ===
+The schema only specifies and constraints the types of the objects that should be placed in a model. While the schema is essential to the context engine since it provides guidelines to what can be instantiated within the model, achieving a conceptual model of a house (building) and all its online devices is the ultimate goal of the context engine. To this end, the context engine will provide a file format that is easily approachable allowing people to quickly model their own house. At later stages, and depending on the success of the approach, graphical tools could certainly provide help in specifying the final model, perhaps based on existing drawings (blueprints or CAD).
+
+Below is an extract of a model, based on the example schema above. The purpose of this example is to set the scene and provide a flavour for how model files could look like. Complete models will tend to be extensive, so the example below is not complete.
