@@ -385,7 +385,6 @@ An example output is provided below; actual context descriptions are usually muc
          "details":"http://www.ivt.se/IVT_Greenline_HT_Plus",
          "name":"Heat Pump"
    }
- }
 ]
 }}}
 
