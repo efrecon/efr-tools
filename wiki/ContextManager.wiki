@@ -1,0 +1,26 @@
+#an IoT hub for sensors, actuators and cloud services
+
+= Introduction =
+
+The context manager (sometimes called the context engine) is aimed at being the hub of the house, i.e. the place where all relevant sensors report (directly or indirectly) their data, sometimes in aggregated form, but also where all applications will dig for information that is
+relevant to them, i.e. both values from some sensors, but also their location or information about their surroundings. In addition, the manager is able to integrate external cloud services that are relevant for applications running in the house (or for the house).
+
+The context engine provides dynamic ways to model the context, e.g. a house and all its online devices, be they sensors or actuators, but also its inhabitants and their coarse or exact location for example. The dynamism of the context is essential so as to be able to adapt to new types and sorts of devices as they are introduced, but also to adapt to cultural differences when it comes to understanding (and thus modelling) the space. All houses have rooms, but not all households use these rooms in the same way, especially when looking from an international perspective.
+
+= Summary of Functionalities =
+== Design ==
+The context engine provides the following set of functionality:
+  * It takes a schema and a model as input to provide a logical context of a building or a house. This context can be accessed and modified using REST/json calls for maximised flexibility and integration.
+  * The context engine provides a number of ground operations to:
+    * Modify values of objects that already are instantiated, which will be an operation that is often used when the value of a sensor changes.
+    * Provide means to search for objects by the content of their field, the name of their class, etc.
+    * Provide means to understand arrays as a technique to organise (part of) the model in a hierarchy and to find specific objects within such a hierarchy.
+    * Get the content of the whole or part of the context, including the values of the fields of the instantiated objects and including values from the past, whenever they are accessible.
+    * Provide means to trigger external web services whenever (part of) an object has changed.
+  * The context engine provides hooks to handle historical and planned data. Historical data is essential for data-mining activities so as to analyse (groups of) household behaviour. Planned data can be used to store the result of data-mining activities, but also to store data from external services, such as weather forecasts.
+    * A hook is able to automatically save versions of objects to a database for later retrieval. Given the unstructured nature of the context, noSQL databases are a perfect match, especially since they form the base of a number of data-mining techniques.
+    * Another will soon be able to update the actual context using data that has been time stamped in the future and placed in the noSQL cluster.
+  * The context engine should be easily extendable and provides the ability to be extended by plugins. Plugins will improve or complement the behaviour of the context engine based on its internal API.
+  * On top of the plugin system, the context engine provides the concept of “conduits” that are logical entities connected to external web services and will direct data into or from the model depending on a number of conditions. Typically, conduits will perform some transformation on the data to or from the external web service, while also retaining data that is specific to the remote service, e.g. login credentials, authorisation details, session information, etc.
+
+The figure below describes a schematic description of the context engine. Note that the figure shows both conduits and hooks to help understanding the general design. However, access to external services and database services are described in more details in the remainder of this document.
