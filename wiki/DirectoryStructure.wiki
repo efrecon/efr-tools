@@ -1,4 +1,4 @@
-#Preferred Directory Structure when working with efr-tools
+#summary Preferred Directory Structure when working with efr-tools
 
 = Introduction =
 
