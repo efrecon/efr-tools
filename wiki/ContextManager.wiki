@@ -229,3 +229,360 @@ Implementation of the schema is found in the [http://code.google.com/p/efr-tools
 The schema only specifies and constraints the types of the objects that should be placed in a model. While the schema is essential to the context engine since it provides guidelines to what can be instantiated within the model, achieving a conceptual model of a house (building) and all its online devices is the ultimate goal of the context engine. To this end, the context engine will provide a file format that is easily approachable allowing people to quickly model their own house. At later stages, and depending on the success of the approach, graphical tools could certainly provide help in specifying the final model, perhaps based on existing drawings (blueprints or CAD).
 
 Below is an extract of a model, based on the example schema above. The purpose of this example is to set the scene and provide a flavour for how model files could look like. Complete models will tend to be extensive, so the example below is not complete.
+
+{{{
+Outside pHataren1 {
+  name "PositivHataren1"
+  contains {myHouse}
+  devices {outsideTemp}
+}
+Address aSoderman10 {
+  street "August Södermansväg"
+  streetNumber 10
+  areaCode 12938
+  city "Hägersten"
+  country "Sweden"
+}
+# Approximate center of our lot.
+Coordinate myPosition {
+  latitude 59.299428
+  longitude 17.970209
+}
+# The house contains three floors, which will contain the rooms.
+Building myHouse {  
+  name "House Frecon-Waller"
+  address aSoderman10
+  pos myPosition
+  contains {ground cellar top}
+}
+# The different floors in the house, here only one for the sake of
+# concision.
+Floor ground {
+  name "Ground Floor"
+  contains {hall kitchen diningRoom livingRoom bath vilma}
+  above cellar
+  below top
+}
+#######
+# Devices
+Thermometer outsideTemp {
+  name "Heat Pump's temperature sensor outside"
+}
+}}}
+
+
+The model should use the schema to control the content of objects that are created within the model. Every instance of a class should be referenced using an identifier. Using techniques similar to those used for the schema, objects can be referenced before they are actually used, but the model should provide enough feedback whenever the data that is specified does not correspond to the schema that controls what can be specified.
+
+In the resulting model, both instantiated objects within the model, but also classes should be identified by a UUID. The UUID should be of type 3 or 5 and build using a concatenation of the URL to the model (or to the schema), the class name and (when relevant) the reference to the object. This ensures the uniqueness of UUID even upon restarts of the context engine.
+
+Below is a BNF representation of the complete grammar that the model specification should support. The grammar is defined according to the syntax specified in RFC 2234.
+
+{{{
+sign            = "+" / "-"
+float           = [sign] 1*DIGIT ["." 1*DIGIT]
+integer         = [sign] 1*DIGIT
+timestamp       = <A timestamp as defined in RFC3339>
+boolean         = "on" / "off" / "true" / "false" / integer
+string          = *VCHAR
+
+uppercase       = "A"-"Z"
+class-name      = uppercase 1*ALPHA
+
+lowercase       = "a"-"z"
+object-ref      = lowercase 1*ALPHA
+
+field-name      = lowercase 1*ALPHA
+field-value     = DQUOTE string DQUOTE
+field-value     /= (boolean / DQUOTE boolean DQUOTE)
+field-value     /= integer
+field-value     /= DQUOTE timestamp DQUOTE
+field-value     /= float
+field-value     /= object-ref
+field-list      = "{" *(1*LWSP field-value) "}"
+field-def       = field-name 1*LWSP (field-list / field-value)
+
+object-def      = class-name 1*LWSP object-ref 1*LWSP
+                    "{" *(1*LWSP field-def) *LWSP "}" (CR/CRLF/LF)
+
+comment         = “#” *VCHAR (CR/CRLF/LF)
+empty-line      = WSP (CR/CRLF/LF)
+
+schema          = *(object-def / comment / empty-line)
+}}}
+
+There are some extra checks that are performed during the parsing. However, these are based on the schema specification and fall outside of the BNF description of the model. These checks should be as follows:
+
+  * Within an instance definition, only fields which are directly specified for the class in the schema or inherited by the class should appear.
+￼  * {{{field-list}}} above can only appear for fields that have been specified as arrays in the schema.
+  * It is not possible to mix types in an array.
+  * Values that fall off the constraint definition will not be allowed.
+
+It is acceptable not to specify the value of a given field, in which case it will default to the following values, which are type dependent:
+  * The default Integer is 0
+  * The default Float is 0.0
+  * The default String is the empty string
+  * The default Boolean is false.
+  * The default timestamp is the current date and time at instantiation.
+  * The default UUID is an automatically generated UUID of type 4.
+  * The default array is empty.
+
+== Web Service API ==￼
+The web service API supported by the context engine accepts REST calls and respond to these calls solely using JSON constructs. The “tree” of the calls is organised as follows:
+  * {{{/context}}} provides access to the context itself, i.e. getting information about the classes, the objects of the objects, but also setting their value or registering actions to be performed whenever values are modified (see trigger below). Individual items are encapsulated under {{{/context/<UUID>}}}, where <UUID> should be replaced by the UUID of a class or an object.
+  * {{{/trigger}}} is the sub-tree that supports long-lived connections to generic external web-services. This sub-tree is for querying, destroying and triggering manually existing triggers.
+  * {{{/find}}}, {{{/locate}}} and {{{/topmost}}} are root level trees for find objects within the context and traversing the hierarchy that it forms￼.
+  * {{{/conduits}}} is the tree that encapsulates all plug in conduits that are made available to talk to external well-known web-services, thus encapsulating logic specific to these services. 
+
+￼￼￼=== Accessing Objects ===￼
+￼￼==== /context ====
+This operation does not take any REST arguments and return a JSON array containing a full description of the content of the context and of its current values. Each object in the array ￼￼represents an object of the context and is returned as a JSON array. The JSON array contains the following fields:
+  * reference is the name of the reference to the object as from the model file that was read to initialize the context. This can never be used for queries and only exists for enabling a matching against the content of the initial file when debugging or looking for possible problems.
+  * uuid is the UUID of the object.
+  * class is the UUID of the class that describes the object.
+  * value is a JSON object itself where each field has the same name as the field of the instance of the object and each JSON value contains the value of that field. In other words, value provides the full current state of the object.
+
+An example output is provided below; actual context descriptions are usually much longer:
+
+{{{
+[
+   {
+      "reference":"heating",
+      "uuid":"5c931263-5a6c-5096-d40f-c290492fbca7",
+      "class":"75478d31-c6c5-5e89-010a-03d995528f14",
+      "value":{
+         "name":"heating and workshop",
+         "contains":[
+
+         ],
+         "devices":[
+            "55851044-b290-56a5-3c88-d64ffbfa75e9"
+         ]
+      }
+   },
+   {
+      "reference":"greenline",
+      "uuid":"55851044-b290-56a5-3c88-d64ffbfa75e9",
+      "class":"14b36c3a-3b70-5d3f-c64a-ad2e82f260c8",
+      "value":{
+         "coldFluidIn":0,
+         "coldFluidOut":0,
+         "heatFluidOut":0,
+         "compressing":false,
+         "resistance":0,
+         "valve":false,
+         "radiatorIn":0,
+         "radiatorOut":0,
+         "hotWater":0,
+         "compressor":0,
+         "room":0,
+         "outside":0,
+         "heatFluidIn":0,
+         "model":"Greenline HT+",
+         "manufacturer":"IVT",
+         "details":"http://www.ivt.se/IVT_Greenline_HT_Plus",
+         "name":"Heat Pump"
+   }
+ }
+]
+}}}
+
+
+￼￼==== /context/<UUID> ====
+In this call, the UUID of the class or object is taken implicitly from the path. This operation accepts the following REST arguments:
+  * {{{uuid}}}, the UUID of the object or the class to request information for, in which case the <UUID> part of the path can be omitted.
+  * ￼{{{when}}} specifies a timestamp in the past for which we want to request the data for. This only works for objects and is explained in further details below.
+
+The call returns a JSON array containing the current value of the object requested or of the class. For objects, this is the same as the value from the operation above. For classes, it is a JSON array with the following fields:
+  * name is the name of the class
+  * uuid is the UUID of the class
+  * supers is an array containing all the super classes of the class in the hierarchy, starting from the one closest to the class in the hierarchy and ending with the topmost class in the class hierarchy.
+  * fields is an array of objects where each object contains the following fields:
+     * origin is the UUID of the class that “owns” the field, i.e. where the field was declared. This is to be cross-matched to both the UUID of the class itself, but also of its super classes in the hierarchy.
+    * name is the name of the field.
+    * type is the class name of the field, which can include constraints or ground types.
+    * multiple is a Boolean telling if the field is an array (true) or not (false).
+
+In most cases, applications will request for the current value of an object, thus leaving away or blank the when argument to the REST call. When accessing values from the past, this argument can contain one of the following:
+  * An integer, which is expressed in the number of seconds since the epoch.
+  * A string formatted in the RFC 3339 format
+  * A string formatted according to the former UNIX conventions, in which case the context engine will try to do its best to parse the date. This format accepts “friendly” specifications such as “today” or “yesterday”.
+
+Assuming data is being versioned and saved as time goes by to the noSQL cluster, searching will look for a match within a span of +/- 24h around the timestamp that is specified by when and will return the data at the time that is closest to the requested timestamp, i.e. more specifically the first data available strictly before the timestamp that was given if no data was stored at that exact timestamp.
+
+Following the example above, calling /context/55851044-b290-56a5-3c88-d64ffbfa75e9 would return the following JSON array:
+
+{{{
+￼   {
+         "coldFluidIn":0,
+         "coldFluidOut":0,
+         "heatFluidOut":0,
+         "compressing":false,
+         "resistance":0,
+         "valve":false,
+         "radiatorIn":0,
+         "radiatorOut":0,
+         "hotWater":0,
+         "compressor":0,
+         "room":0,
+         "outside":0,
+         "heatFluidIn":0,
+         "model":"Greenline HT+",
+         "manufacturer":"IVT",
+         "details":"http://www.ivt.se/IVT_Greenline_HT_Plus",
+         "name":"Heat Pump"
+   }
+}}}
+
+
+￼￼￼=== Modifying Objects ===￼
+￼￼==== /context/<UUID>/set ====
+This operation permits the user to modify the content of an object of the context. Once again, the UUID of the object to modify is to be taken from the path (the <UUID> above) or from the REST argument uuid, in which case the UUID should be omitted from the path. The operations accepts any number of REST arguments, which name should match the name of a field in the object and which value is the new value for that field. The value should be an (encoded and valid) JSON representation of the value at that time. The operation returns a JSON representation of the new value of the object after the modification of the field(s).
+
+Continuing on the example above, calling {{{/context/55851044-b290-56a5-3c88-d64ffbfa75e9?hotWater=56.6}}} would return the following JSON array:
+
+{{{
+{
+         "coldFluidIn":0,
+         "coldFluidOut":0,
+         "heatFluidOut":0,
+         "compressing":false,
+         "resistance":0,
+         "valve":false,
+         "radiatorIn":0,
+         "radiatorOut":0,
+         "hotWater":56.6,
+         "compressor":0,
+         "room":0,
+         "outside":0,
+         "heatFluidIn":0,
+         "model":"Greenline HT+",
+         "manufacturer":"IVT",
+         "details":"http://www.ivt.se/IVT_Greenline_HT_Plus",
+         "name":"Heat Pump"
+   }
+}}}
+
+
+==== ￼￼/context/<UUID>/append ====
+This operation permits the user to append value to multi-fields in an object of the context. Once again, the UUID of the object to modify is to be taken from the path (the <UUID> above) or from the REST argument uuid, in which case the UUID should be omitted from the path. The operations accepts any number of REST arguments, which name should match the name of a field in the object and which value is the new value that should be appended to the field. The operation returns a JSON representation of the new value of the object after the modification of the field(s).
+￼￼
+==== /context/<UUID>/destroy ====
+This operation removes an object from the context. Once again, the UUID of the object to modify is to be taken from the path (the <UUID> above) or from the REST argument uuid, in which case the UUID should be omitted from the path.
+
+
+￼￼￼=== Search ===￼
+A number of the search operations accept string patterns for restricting the search to parts of the context. For two strings to match, their contents must be identical except that the following special sequences may appear in the pattern:
+
+  * * Matches any sequence of characters in the string, including a null string.
+  * ? Matches any single character in the string.
+  * [chars] Matches any character in the set given by chars. If a sequence of the form x-y appears in chars, then any character between x and y, inclusive, will match.
+￼  * \x Matches the single character x. This provides a way of avoiding the special interpretation of the characters *?[]\ in the pattern.
+
+￼￼==== /find ====
+This operation aims at finding objects within the context. It accepts the following REST arguments
+  * type is a pattern that restrict the search to the classes which name matches the pattern or which inherit from that class. An empty type includes thus all the classes of the context.
+  * field is a pattern that match the name of one or several particular fields in the matching classes. It defaults to all the fields.
+  * filter is a pattern that match the value of the selected fields, it defaults to any value.
+
+The format of the result is the same as for the /context operation described above. Actually, without any arguments at all and given the default behaviour of the REST arguments, /find called without any arguments is conceptually similar to calling /context, even though the order of the returned JSON array might not be the same.
+
+￼￼==== /topmost ====
+This operation assumes that a topmost class is used to categorize e.g. space or devices and that it uses an array field to model the hierarchy containment of the spaces or devices. This is the encouraged way of organizing and classifying objects in models (and therefore schemas). It is then able to return the topmost object(s) of that hierarchy. The operation takes the following mandatory REST arguments
+  * type is a pattern that should match the topmost container class from which all other classes in the categorisation inherit.
+  * traverse is the exact name of the array field that forms the hierarchical classification.
+
+So, for example, if a schema was using the class “Space” as the topmost class in the schema hierarchy for modelling space and was using the field “contains” (an array) in that class for modelling object hierarchy, calling {{{/topmost?type=Spa*&traverse=contains}}} would return the following JSON array, formatted as for calls to {{{/find}}}. This array contains the definition for “Sweden”, a meaningful alternative to a topmost container for all objects that inherits from Space in a model.
+
+{{{
+￼[
+   {
+      "reference": "sweden",
+      "uuid": "f1b0d9a8-8990-50c0-ad49-0a6b4a3ec35f",
+      "value": {
+         "name": "Sweden",
+         "contains": [
+            "ead9d1f1-af80-5639-59f0-5c57c1c58569"
+         ],
+         "devices": [
+            "684c4e19-c4ed-5861-f127-59109a41bb56",
+            "929494fb-84e1-50cb-beea-c04aecda088a"
+         ]
+      }
+   }
+]
+}}}
+
+
+￼￼==== /locate ====
+Locate make the same hierarchical categorisation assumption as /topmost, but looks for specific objects within that hierarchy. Thus, the operation can be understood as finding within that hierarchy. It is typically used for looking specific devices within the space. The operation takes the following REST arguments:
+  * traverse is the exact name of the array field that forms the hierarchical classification. This is mandatory for a successful query.
+  * within specifies within which multi-field we should be looking for objects. Not specifying this parameter will be understood as looking within the same multi-field as for hierarchy traversal (see type).
+  * container should be the UUID of a class or an object. If pointing at an object, this will be the top object at which we start the traversal.  If pointing at a class, the traversal will select all topmost objects of that given class, respecting the traverse specification.
+  * type is a pattern that selects the type of the object that we will be looking for. If not specified, the query will be looking for the same type as the type of the within field.
+  * field is a pattern matching the name of a field in the objects that we are looking for, i.e. of the type specified implicitly or explicitly by type
+  * filter is a pattern matching the content of the field and only objects whose field content matches the value of the filter will be returned.
+
+The /locate operation returns its results in the same format as /find or /context. In the examples below, we assume that the schema uses “contains” to construct the space hierarchy and that the Space class contains an array called “devices” that might contains online devices, a ground class that is inherited from all devices that can be placed in the context.
+
+{{{/locate?container=f1b0d9a8-8990-50c0-ad49-0a6b4a3ec35f&traverse=contains&field=name&filter=heating*}}} would return a room which name would start with the string heating and which would be contained under the topmost “Sweden” object from the example above.
+
+￼{{{/locate?container=f1b0d9a8-8990-50c0-ad49-0a6b4a3ec35f&traverse=contains&within=devices}}} would return all the devices that are contained in the same hierarchy as in the previous example. 
+
+{{{/locate?container=f1b0d9a8-8990-50c0-ad49-0a6b4a3ec35f&traverse=contains&within=devices&type=HeatPump}}} would only return the instances of a class named HeatPump among the devices from the example above.
+
+
+￼￼￼=== Generic Web Service Integration === ￼
+￼￼==== /context/<UUID>/listen ====
+This operation listens to modifications made to an object and is able to mediate the content of the object to remote web services. Once again, the UUID of the object to modify is to be taken from the path (the <UUID> above) or from the REST argument uuid, in which case the UUID should be omitted from the path. The REST call takes the following arguments:
+  * receiver is the URL that will receive the callback and be notified when the object changes. In the URL, any string that is surrounded by % signs will be replaced by the current value of the field with the same name (sans % signs) in the object.
+  * field is a pattern matching one of more of the field of the object. This can be used to react only on parts of the objects. Not specifying the field will lead to a callback for any modification to the fields in the object.
+  * header is a list of key and values, separated by colon signs. These will be automatically be added to the HTTP request at the time of the callback, permitting to transmit API keys or the like. It defaults to an empty string, i.e. no special headers.
+  * method can be one of GET, POST, PUT or DELETE and specifies which type of HTTP method will be used at the time of the callback. It defaults to GET and will automatically become a POST if query arguments are specified.
+  * type can be used to specify the content type of the data that will be sent as part of the request. It will default to some sensible values, but can be used to drive the “Content-Type” part of the HTTP header better whenever necessary.
+  * body can be used to put or post data via the HTTP request made to the server. In the body, which is a textual string, strings surrounded by % signs will be substituted as in receiver.
+  * jitter is expressed in milliseconds and guarantees that callbacks are not made more often than the jitter period. It defaults to 100, so as to allow to easily set several fields in an object simultaneously without triggering several callbacks.
+  * expression is a mathematical expression that should evaluate to true for the trigger to fire and perform the callback. In that expression, strings surrounded by % signs will be substituted as in receiver. The complete syntax for that expression is out of the scope of this text but can be found here￼.
+  * always is a Boolean controlling when the callback should be considered for triggering. The default is to only trigger the callback whenever the value of the fields that the callback is bound to changes, setting always to true will make sure the callback triggers even if none of the values have changed.
+
+==== /trigger ====
+This operation can be used to return the list of triggers that are currently registered within a context. It returns a JSON array of object which fields are exactly the ones as of the trigger creation (see above), with the addition of:
+￼  * uuid, a UUID for the trigger itself.
+  * object, the UUID of the object to which the trigger is associated.
+￼￼
+==== /trigger/<UUID> ====
+This operation is exactly the same as the above, except that it returns the information for a single trigger only, the UUID of which is extracted from the path at <UUID>. Once again, the UUID of the trigger to request  is to be taken from the path (the <UUID> above) or from the REST argument uuid, in which case the UUID should be omitted from the path.
+￼￼
+==== /trigger/<UUID>/test ====
+This operation manually triggers the logic around the trigger. In other words, if the trigger is set to always callback the receiver URL, it will perform the corresponding web service call as long as the mathematical expression evaluates positively. Once again, the UUID of the trigger to test  is to be taken from the path (the <UUID> above) or from the REST argument uuid, in which case the UUID should be omitted from the path.
+￼
+==== ￼/trigger/<UUID>/destroy ====
+This operation removes a trigger. Once again, the UUID of the trigger to remove  is to be taken from the path (the <UUID> above) or from the REST argument uuid, in which case the UUID should be omitted from the path.
+
+
+￼== Initial Pairing ==
+In order to be able to restart from a similar state at all times, the context engine is able to read from a pairing configuration file once the schema and the model have been read. The purpose of this file is to establish all the necessary conduit connections to well-known services. Pairing is made at the conduit level, at the REST/JSON level. In other words, we initialising the pairing, the context engine behaves as it was an external client, thus being an external client to itself. This is to be able to support new conduits in the future and to fail nicely if some conduit initialisation did not succeed properly. The pairing contract file is formatted as follows.
+
+Any blank line or line starting with a hash (#) sign will be ignored. Each pairing involve at least a line specifying the source and destination, possibly followed by a number of lines (led by any positive number of whitespaces) describing the mapping between the receiver fields and the source fields.
+
+Pairing lines are formatted according to the following grammar:
+
+{{{
+source1*WSP*ALPHAinteger*ALPHA[&lt;&gt;]WSPdestination
+}}}
+
+The integer defines a polling frequency, in seconds, whenever this is needed for the pairing to function properly. Omitting this will default to the polling default that is specific to each conduit and usually is 2 minutes. The source and destination will automatically define the type of conduit that is to be used to be able to perform the operation. They can be one of the following:
+
+  * A single integer will be understood as the identifier of a feed at [https://cosm.com/ cosm]￼. While the conduit provides way to access non-public feeds via an API key, it will sometimes be ￼enough to simply be able to access a (public) feed, polling its content at the necessary frequency.
+  * A string matching a UUID will be understood as an object of the present context.
+  * A URL terminated by a UUID will be understood as a remote context
+  * A URL-like starting with the scheme gcal: will be understood as a Google calendar. The exact format is gcal://username:password@calendar-name/. Where username and password are the name of a valid Google account together with its password, and calendar-name is the name of a calendar accessible to that account.
+
+Lines directly under a pairing lines and indented by any positive number of whitespaces will be used to match the destination fields to the source fields. They have the following format:
+
+{{{
+1*WSP%field-name%*WSP=*WSPmath-expr
+}}}
+
+Where field-name is the name of a “field” in the destination of the pair (for a local or remote context, it would be the name of a field within the object; for a cosm feed, it would be the id of a datastream). The mathematical expression uses field names surrounded by % signs, as for the expression in the triggers and within the source.
+
+Conduits are exhibited to external applications under the /conduits virtual tree of the web server API. Being plug ins, and thus not entirely part of the architecture itself, the description of their API has been kept out of this document for brevity. Most conduits provide an API to establish pairing, to list the existing pairs, modify existing pairs and destroy them. In most cases, the conduit allow the usage of the values of an object's field when their names are enclosed by percentage signs, but also some simple mathematical transformation on the way to or from the cloud service. For example, the twitter conduit is bound to an object and is able to use the values of the fields in the objects in the tweets that are sent to the service.
