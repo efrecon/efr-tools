@@ -9,9 +9,11 @@ namespace eval ::ssdp {
 	    -frequency    180
 	    -port         1900
 	    -mcast        239.255.255.250
+	    -delay        3
+	    -ttl          2
 	    udp           ""
 	}
-	variable version 0.1
+	variable version 0.2
 	variable libdir [file dirname [file normalize [info script]]]
 	::uobj::install_log ssdp SSDP
 	::uobj::install_defaults ssdp SSDP
@@ -78,8 +80,9 @@ proc ::ssdp::__receive { cp } {
     # Read from socket and discover who is this coming from
     set message [read $CP(sock)]
     set peer [fconfigure $CP(sock) -peer]
+    if { [string trim $message] eq "" } return
 
-    # Split message to ease parsning and analyse tag line
+    # Split message to ease parsing and analyse tag line
     set message [split $message \n]
     foreach {method url version} [lindex $message 0] break
 
@@ -96,28 +99,31 @@ proc ::ssdp::__receive { cp } {
     switch -exact -- $method {
 	"M-SEARCH" {
 	}
+	"HTTP/1.1" -
 	"NOTIFY" {
-	    array set MSG $headers
 	    # Only do something on the ssdp:alive which contains the
 	    # announcements. Maybe should we react more and have a
 	    # chance to discover services and devices earlier on
 	    # instead.
-	    if { [array names MSG usn] ne "" \
-		     && [array names MSG nts] ne "" \
-		     && $MSG(nts) eq "ssdp:alive" } {
-		set trailer ""
+	    if { [array names MSG usn] ne "" } {
+		# Extract notification type (if any) and UUID from the
+		# composite identifier of the advertisement.
+		set nt ""
 		set dcolon [string first "::" $MSG(usn)]
 		if { $dcolon >= 0 } {
-		    set trailer \
+		    set nt \
 			[string trim [string range $MSG(usn) $dcolon end] :]
-		    set MSG(usn) \
+		    set MSG(uuid) \
 			[string trim [string range $MSG(usn) 0 $dcolon] :]
+		} else {
+		    set MSG(uuid) $MSG(usn)
 		}
+		set MSG(uuid) [regsub {^uuid:} $MSG(uuid) ""]
 
 		# Create or update the device object, now that we know
-		# its usn.
+		# its UUID
 		set d [::uobj::find [namespace current] device \
-			   [list -usn == $MSG(usn)] [::uobj::id $cp]]
+			   [list -uuid == $MSG(uuid)] [::uobj::id $cp]]
 		if { $d eq "" } {
 		    set d [::uobj::new [namespace current] device \
 			       [::uobj::id $cp]]
@@ -126,26 +132,26 @@ proc ::ssdp::__receive { cp } {
 		    set DEVICE(vanish) ""
 		    set DEVICE(devices) {}
 		    set DEVICE(services) {}
-		    ${log}::notice "Discovered new UPnP root device: $MSG(usn)"
+		    ${log}::notice "Discovered new UPnP root device: $MSG(uuid)"
 		    ::uobj::objectify $d [list [list config configure]]
 		} else {
 		    upvar \#0 $d DEVICE
 		}
 
 		# Copy interesting data into device object.
-		foreach k {location usn server} {
+		foreach k {location uuid server} {
 		    if { [array names MSG $k] ne "" } {
 			if { $MSG($k) ne "" || [array names DEVICE -$k] == ""} {
 			    set DEVICE(-$k) $MSG($k)
 			}
 		    }
 		}
-		if { [string first ":device:" $trailer] >= 0 } {
-		    lappend DEVICE(devices) $trailer
+		if { [string first ":device:" $nt] >= 0 } {
+		    lappend DEVICE(devices) $nt
 		    set DEVICE(devices) [lsort -unique $DEVICE(devices)]
 		}
-		if { [string first ":service:" $trailer] >= 0 } {
-		    lappend DEVICE(services) $trailer
+		if { [string first ":service:" $nt] >= 0 } {
+		    lappend DEVICE(services) $nt
 		    set DEVICE(services) [lsort -unique $DEVICE(services)]
 		}
 
@@ -160,13 +166,13 @@ proc ::ssdp::__receive { cp } {
 		set next [expr {[string trim $age]*1000}]
 		set DEVICE(vanish) \
 		    [after $next [namespace current]::__vanish $d]
-		#${log}::debug "Auto-removal of $MSG(usn) in $age seconds"
+		#${log}::debug "Auto-removal of $MSG(uuid) in $age seconds"
 
 		# Deliver callback for the notification type that has
 		# just arrived.
 		foreach {ptn cb} $CP(alive) {
-		    if { [string match $ptn $MSG(nt)] } {
-			if { [catch {eval $cb $cp $d $MSG(nt)} err] } {
+		    if { [string match $ptn $nt] } {
+			if { [catch {eval $cb $cp $d "$nt"} err] } {
 			    ${log}::warn "Could not deliver callback $cb: $err"
 			}
 		    }
@@ -212,7 +218,7 @@ proc ::ssdp::__search { cp } {
     set search "M-SEARCH * HTTP/1.1
 Host:$CP(-mcast):$CP(-port)
 Man:\"ssdp:discover\"
-MX:3
+MX:$SSDP(-delay)
 ST:ssdp:all
 User-Agent:$CP(-agent)
 
@@ -292,7 +298,6 @@ proc ::ssdp::register { cp cmd { ptn "*" } } {
 }
 
 
-
 # ::ssdp::config -- (re)configure an SSDP listener
 #
 #	This procedure either (re)configure an SSDP listener or
@@ -340,9 +345,11 @@ proc ::ssdp::config { o args } {
 	    if { $OBJ(sock) eq "" && $SSDP(udp) ne "" } {
 		set OBJ(sock) [udp_open $OBJ(-port) reuse]
 		fconfigure $OBJ(sock) -translation crlf -buffering none
-		fconfigure $OBJ(sock) -ttl 2
 		if { [catch {fconfigure $OBJ(sock) \
-				 -mcastadd $OBJ(-mcast)} err] } {
+				 -mcastadd $OBJ(-mcast) \
+				 -ttl $SSDP(-ttl) \
+				 -remote [list $OBJ(-mcast) $OBJ(-port)]} \
+			  err] } {
 		    # Discovered while running without network
 		    ${log}::error "Could not listen to multicast group\
                                    $OBJ(-mcast): $err"
@@ -351,7 +358,16 @@ proc ::ssdp::config { o args } {
 			[list [namespace current]::__receive $o]
 		}
 	    }
-	    
+
+	    # Make up a proper agent string if we had an empty one,
+	    # this does not use the platform package to make sure the
+	    # code can work on older versions of Tcl.
+	    if { $OBJ(-agent) eq "" } {
+		set OBJ(-agent) \
+		    "$tcl_platform(os)/$tcl_platform(osVersion) UPnP/1.1"
+		append OBJ(-agent) " " "Tcl/$version"
+	    }
+
 	    # Turn on active search for existing services on the network
 	    if { $OBJ(searcher) eq "" && $OBJ(-frequency) > 0 \
 		     && $SSDP(udp) ne "" } {
@@ -360,12 +376,6 @@ proc ::ssdp::config { o args } {
 	    # Turn off active search when frequency is negative.
 	    if { $OBJ(searcher) ne "" && $OBJ(-frequency) <= 0 } {
 		after cancel $OBJ(searcher)
-	    }
-	    
-	    if { $OBJ(-agent) eq "" } {
-		set OBJ(-agent) \
-		    "$tcl_platform(os)/$tcl_platform(osVersion) UPnP/1.1"
-		append OBJ(-agent) " " "Tcl/$version"
 	    }
 	}
     }
