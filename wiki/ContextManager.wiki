@@ -263,13 +263,13 @@ Floor ground {
   above cellar
   below top
 }
-#######
+#
 # Devices
+#
 Thermometer outsideTemp {
-  name "Heat Pump's temperature sensor outside"
+  name "Heat Pump temperature sensor outside"
 }
 }}}
-
 
 The model should use the schema to control the content of objects that are created within the model. Every instance of a class should be referenced using an identifier. Using techniques similar to those used for the schema, objects can be referenced before they are actually used, but the model should provide enough feedback whenever the data that is specified does not correspond to the schema that controls what can be specified.
 
@@ -277,7 +277,7 @@ In the resulting model, both instantiated objects within the model, but also cla
 
 Below is a BNF representation of the complete grammar that the model specification should support. The grammar is defined according to the syntax specified in RFC 2234.
 
-<pre>
+{{{
 sign            = "+" / "-"
 float           = [sign] 1*DIGIT ["." 1*DIGIT]
 integer         = [sign] 1*DIGIT
@@ -308,7 +308,7 @@ comment         = “#” *VCHAR (CR/CRLF/LF)
 empty-line      = WSP (CR/CRLF/LF)
 
 schema          = *(object-def / comment / empty-line)
-</pre>
+}}}
 
 There are some extra checks that are performed during the parsing. However, these are based on the schema specification and fall outside of the BNF description of the model. These checks should be as follows:
   * Within an instance definition, only fields which are directly specified for the class in the schema or inherited by the class should appear.
