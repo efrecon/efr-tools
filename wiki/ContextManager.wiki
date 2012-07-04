@@ -311,10 +311,10 @@ schema          = *(object-def / comment / empty-line)
 </pre>
 
 There are some extra checks that are performed during the parsing. However, these are based on the schema specification and fall outside of the BNF description of the model. These checks should be as follows:
-    * Within an instance definition, only fields which are directly specified for the class in the schema or inherited by the class should appear.
-￼    * {{{field-list}}} above can only appear for fields that have been specified as arrays in the schema.
-    * It is not possible to mix types in an array.
-    * Values that fall off the constraint definition will not be allowed.
+  * Within an instance definition, only fields which are directly specified for the class in the schema or inherited by the class should appear.
+￼  * The rule {{{field-list}}} above can only appear for fields that have been specified as arrays in the schema.
+  * It is not possible to mix types in an array.
+  * Values that fall off the constraint definition will not be allowed.
 
 It is acceptable not to specify the value of a given field, in which case it will default to the following values, which are type dependent:
   * The default Integer is 0
@@ -324,7 +324,6 @@ It is acceptable not to specify the value of a given field, in which case it wil
   * The default timestamp is the current date and time at instantiation.
   * The default UUID is an automatically generated UUID of type 4.
   * The default array is empty.
-
 
 = Web Service API =￼
 
@@ -437,9 +436,9 @@ Following the example above, calling {{{/context/55851044-b290-56a5-3c88-d64ffbf
 }}}
 
 
-￼￼￼=== Modifying Objects ===￼
+￼￼￼== Modifying Objects ==￼
 
-￼￼==== /context/UUID/set ====
+￼￼=== /context/UUID/set ===
 
 This operation permits the user to modify the content of an object of the context. Once again, the UUID of the object to modify is to be taken from the path (the {{{UUID}}} above) or from the REST argument uuid, in which case the UUID should be omitted from the path. The operations accepts any number of REST arguments, which name should match the name of a field in the object and which value is the new value for that field. The value should be an (encoded and valid) JSON representation of the value at that time. The operation returns a JSON representation of the new value of the object after the modification of the field(s).
 
