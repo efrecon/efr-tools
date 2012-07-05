@@ -23,6 +23,7 @@ array set CM {
     https       0
     permanent   ""
     rest        {}
+    pertain     1000
 }
 
 
@@ -113,7 +114,7 @@ proc log:out {dt srv lvl str} {
     -options $options \
     -booleans [list] \
     -depends [list event uuidhash oauth rest redis udp] \
-    -load [list minihttpd schema model db UPnP cxapi] \
+    -load [list minihttpd schema model db ssdp UPnP cxapi] \
     -packages [list struct::tree http uuid] \
     -parsed ::init:fix \
     -outlog ::log:out
