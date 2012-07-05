@@ -10,6 +10,27 @@
 ##      ::rest:* (all other commands are deprecated or internal
 ##################
 
+proc ::rest:when { when } {
+    global CM
+
+    if { ! [string is integer $when] } {
+	if { [catch {::schema::from_rfc3339 $when} dt] == 0 } {
+	    set when $dt
+	} else {
+	    if { [catch {clock scan $when} dt] == 0 } {
+		set when $dt
+	    } else {
+		$CM(log)::warn "Could not understand timestamp '$when'.\
+                                Tried RFC3339, raw timestamp and even\
+                                date formatting"
+		set when ""
+	    }
+	}
+    }
+
+    return $when
+}
+
 
 # ::rest:uuid -- ReST UUID content access.
 #
@@ -42,21 +63,7 @@ proc ::rest:uuid { prt sock url qry } {
 
     set when ""
     if { [dict exists $qry when] } {
-	set when [dict get $qry when]
-	if { ! [string is integer $when] } {
-	    if { [catch {::schema::from_rfc3339 $when} dt] == 0 } {
-		set when $dt
-	    } else {
-		if { [catch {clock scan $when} dt] == 0 } {
-		    set when $dt
-		} else {
-		    $CM(log)::warn "Could not understand timestamp '$when'.\
-                                    Tried RFC3339, raw timestamp and even\
-                                    date formatting"
-		    set when ""
-		}
-	    }
-	}
+	set when [::rest:when [dict get $qry when]]
     }
 
     if { $uuid ne "" } {
@@ -147,7 +154,11 @@ proc ::object:append { o f val } {
 #	and values contained in the query are understood as being
 #	field(s) and their value(s) for the object and the object is
 #	updated.  Note that the schema constrains the values being
-#	set.  A JSON respresentation of the object is returned.
+#	set.  A JSON respresentation of the object is returned.  It is
+#	possible to specify a date in the futur or the past using the
+#	field __when. That date should be in the RFC3339 format and in
+#	that case the JSON representation of the update will be
+#	returned only (as opposed to a full object representation).
 #
 # Arguments:
 #	prt	Port number on which the request is received
@@ -171,27 +182,82 @@ proc ::rest:set { prt sock url qry } {
 	set uuid [lindex [split [string trimright $url "/"] "/"] end-1]
     }
 
-    set when ""
-    if { [dict exists $qry __when] } {
-	set when [from_rfc3339 [dict get $qry __when]]
-    }
-
     if { $uuid ne "" } {
 	foreach {o c} [::find:uuid $uuid object] break
 	if { $o ne "" } {
+	    set when ""
+	    if { [dict exists $qry __when] } {
+		set when [::rest:when [dict get $qry __when]]
+		$CM(log)::debug "Setting values for object in future or past:\
+                                 [::schema::to_rfc3339 $when]"
+	    }
+
+	    # Setting values in the future (or the past). We create a
+	    # temporary instance of the object, and insert the values
+	    # from the request into the temporary object (instead of
+	    # the current copy). We hint the db package with the time
+	    # of the insert (i.e. the timestamp contained in __when)
+	    # so that it will be able to store in the database at the
+	    # proper time.
+	    if { $when ne "" } {
+		upvar \#0 $o SRC
+		set o [$c new]
+		upvar \#0 $o OBJ
+		# Copy the UUID since this is the same object,
+		# later/earlier in time.
+		set OBJ(uuid) $SRC(uuid);
+		# Hint at what time the set operations are occuring,
+		# this will be used by the db library.
+		::uobj::keyword $o when $when
+	    }
+
 	    upvar \#0 $o OBJ
 	    set origins [$c inheritance on]
 	    foreach s $origins {
 		foreach f [$s get fields] {
 		    set fname [$f get -name]
 		    if { [dict keys $qry $fname] ne "" } {
-			::object:update $o $f [dict get $qry $fname]
-			$CM(log)::debug "Updated field '$fname' in $o to\
-                                         [dict get $qry $fname]" 
+			set val [dict get $qry $fname]
+			::object:update $o $f $val
+			if { $when eq "" } {
+			    $CM(log)::debug "Updated field '$fname' in $o to\
+                                             $val"
+			} else {
+			    $CM(log)::debug "Field '$fname' in ${o}<-$SRC(id)\
+                                             scheduled to be $val at\
+                                             [::schema::to_rfc3339 $when]"
+			}
 		    }
 		}
 	    }
+
+	    # Remove the keys that were not set by the operation when
+	    # we specify a value in future or past, this will allow
+	    # the db module to work smoothly, but is also conceptually
+	    # proper since we have just described an update (an
+	    # nothing else).
+	    if { $when ne "" } {
+		foreach k [array names OBJ -*] {
+		    if { ![dict exists $qry [string trimleft $k "-"]] } {
+			unset ${o}($k)
+		    }
+		}
+	    }
+
+	    # Return a JSON expression describing either the full
+	    # (current) state of the object, or the value of the
+	    # fields that were set for future or past operations.
 	    append result [::json:object $o $c]
+
+	    # Remove copy of object source when we had specified a
+	    # timestamp, since we don't need it anymore (it will
+	    # hopefully be replayed into our dataspace later). We wait
+	    # some time before the removal since the db module flushes
+	    # to the database only after a while. This is a bit ugly
+	    # though.
+	    if { $when ne "" } {
+		after $CM(pertain) ::uobj::delete $o
+	    }
 	}
     }
 

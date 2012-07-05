@@ -767,6 +767,11 @@ proc ::schema::instance { c args } {
 		    set OBJ(-$FIELD(-name)) $v
 		}
 	    }
+
+	    ::event::generate $CLASS(schema) New \
+		[list %c $c \
+		    %i $o \
+		    %n $ns]
 	}
     }
 

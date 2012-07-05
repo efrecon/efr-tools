@@ -13,7 +13,7 @@
 ##
 ##################
 
-# IMPLEMENATION NOTES
+# IMPLEMENTATION NOTES
 #
 # The module uses the main database and a key called global.databases
 # to know where to store objects. It simply picks up the latest host
@@ -38,6 +38,21 @@
 # implemented in the sorted set at the database level.  The time span
 # for searches is controlled by -span, which is in seconds and
 # defaults to 24h.
+#
+# Updates can be created in the future.  The mechanism is similar to
+# regular writes, as explained above, only that the package uses a
+# "when" hint that contains the time at which the update should occur.
+# There is no check on the timestamp contained in "when", so updates
+# in the past are also accepted.  Updates stored in the database do
+# not entirely describe the whole object at first.  To complement the
+# storage of updates in the future, the package will poll at regular
+# intervals (controlled by -replay, in seconds) for updates that might
+# be necessary to apply to existing objects in the context.  The
+# content of these updates is then applied to the proper objects when
+# time has come.  Same "when" hinting happens at that time, so that a
+# complete of the object is stored in the database.  Note that the
+# replay mechanism can be turned off by specifying a negative (or
+# zero) replay period.
 
 
 package require uobj
@@ -51,8 +66,9 @@ namespace eval ::db {
 	    -redis     localhost:6379
 	    -flush     200
 	    -span      86400
+	    -replay    5
 	}
-	variable version 0.1
+	variable version 0.2
 	variable libdir [file dirname [file normalize [info script]]]
 	::uobj::install_log db DB
 	::uobj::install_defaults db DB
@@ -218,19 +234,24 @@ proc ::db::__flush { db o } {
     # out of the DB in a scalable way.
     if { $c ne "" } {
 	upvar \#0 $o OBJ
-	set now [clock seconds]
+	set when [::uobj::keyword $o when]
+	set now [expr {$when eq "" ? [clock seconds] : $when}]
+	set indices {}
 	$REDIS(redis) deferred 1
 	$REDIS(redis) zadd $OBJ(uuid) $now $now
 	foreach s [$c inheritance on] {
 	    foreach f [$s get fields] {
 		set fname [$f get -name]
-		if { [array names OBJ -$fname] ne "" } {
+		if { [array names OBJ -$fname] ne "" } {\
 		    $REDIS(redis) hset $OBJ(uuid).$now \
 			$fname [__field $f $OBJ(-$fname)]
+		    lappend indices $fname
 		}
 	    }
 	}
 	$REDIS(redis) deferred 0
+	${log}::debug "Added [join $indices ,] indices to HSET $OBJ(uuid).$now"
+	::uobj::keyword $o when ""
     }
 
     # Empty the output timer and the hints. 
@@ -238,6 +259,56 @@ proc ::db::__flush { db o } {
     ::uobj::keyword $o hints ""
 }
 
+
+# ::db::__resolv -- Resolve db format to internal data format
+#
+#       Resolve from the content of the database into the current
+#       format used in our dataspace.  In short, this mainly means
+#       that UUIDs are replaced by identifiers of the objects
+#       contained in the model.
+#
+# Arguments:
+#	m	Identifier of the model to use for resolution
+#	c	Identifier of the class of the object.
+#	updt_p	"Pointer" to an array that describes the data in DB-format.
+#
+# Results:
+#       Return an array that describes the update in internal data
+#       format, i.e. where all UUIDs have been replaced by internal
+#       object identifiers.
+#
+# Side Effects:
+#       None.
+proc ::db::__resolv { m c updt_p } {
+    upvar $updt_p UPDATE
+
+    array set RETURN {}
+    foreach s [$c inheritance on] {
+	foreach f [$s get fields] {
+	    set fname [$f get -name]
+	    if { [array names UPDATE $fname] ne "" } {
+		if { [$f get class] ne "" } {
+		    # Convert back UUIDs, as stored in REDIS, into
+		    # local object identifiers.
+		    if { [$f get -multi] } {
+			set RETURN(-$fname) {}
+			foreach v $UPDATE($fname) {
+			    set vo [$D(model) find $v]
+			    if { $vo ne "" } {
+				lappend RETURN(-$fname) $vo
+			    }
+			}
+		    } else {
+			set RETURN(-$fname) [$D(model) find $UPDATE($fname)]
+		    }
+		} else {
+		    set RETURN(-$fname) $UPDATE($fname)
+		}
+	    }
+	}
+    }
+    return [array get RETURN]
+}
 
 
 # ::db::get -- Get version out of DB
@@ -302,32 +373,7 @@ proc ::db::get { db o { when "" } { resolv on } } {
 	    array set THEN [$REDIS(redis) hgetall $OBJ(uuid).$timestamp]
 	    array set RETURN {}
 	    if { [string is true $resolv] } {
-		foreach s [$c inheritance on] {
-		    foreach f [$s get fields] {
-			set fname [$f get -name]
-			if { [array names THEN $fname] ne "" } {
-			    if { [$f get class] ne "" } {
-				# Convert back UUIDs, as stored in
-				# REDIS, into local object
-				# identifiers.
-				if { [$f get -multi] } {
-				    set RETURN(-$fname) {}
-				    foreach v $THEN($fname) {
-					set vo [$D(model) find $v]
-					if { $vo ne "" } {
-					    lappend RETURN(-$fname) $vo
-					}
-				    }
-				} else {
-				    set RETURN(-$fname) \
-					[$D(model) find $THEN($fname)]
-				}
-			    } else {
-				set RETURN(-$fname) $THEN($fname)
-			    }
-			}
-		    }
-		}
+		array set RETURN [__resolv $D(model) $c THEN]
 	    } else {
 		foreach k [array names THEN] {
 		    set RETURN(-$k) $THEN($k)
@@ -392,39 +438,6 @@ proc ::db::__redis { db o } {
 }
 
 
-proc ::db::settle { db varname idx val { now "" } } {
-    variable DB
-    variable log
-
-    if { ![::uobj::isa $db db] } {
-	return -code error "$db unkown or wrong type"
-    }
-    upvar \#0 $db D
-
-    if { $now eq "" } {
-	set now [clock seconds]
-    }
-
-    # Push the operation in a queue, register __flush to be called
-    # very soon.  The queue should contain lists of triplets,
-    # i.e. identifier of the object, index to be set, value to be
-    # pushed (possibly type of the operation, i.e. SET or APPEND?)
-
-    # Modify __flush so that it is able to handle the queue above,
-    # i.e. it either takes the value of the object from the object
-    # itself (default) or from the different operations that have been
-    # posted to the queue.
-
-    # How do we handle lappend?
-
-    # How do we store and hint this, i.e. setting values in the future
-    # (since this is what we use this for).
-
-    # How ::db::set gets registered to be called when we call
-    # ::rest:set? This should be context dependent, i.e. if we have a
-    # DB, then call otherwise do nothing?
-}
-
 
 # ::db::__write -- Remember write and schedule versioning dump
 #
@@ -472,6 +485,177 @@ proc ::db::__write { db varname idx op } {
     ::uobj::keyword $V(id) hints [lsort -unique $hints]
 }
 
+
+# ::db::__set -- Apply the content of a replay to an object
+#
+#       The procedure will apply the content of a replay object to an
+#       existing object of the context.  It autmatically translates
+#       from the database-friendly format to the internal format,
+#       resolving, for example, UUIDs to object identifiers within our
+#       data space.
+#
+# Arguments:
+#	r	Identifier of the replay object, as created in __replay
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       Remove the replay object since it has no purpose anymore.
+proc ::db::__set { r } {
+    variable DB
+    variable log
+
+    if { ![::uobj::isa $r replay] } {
+	return -code error "$r unkown or wrong type"
+    }
+
+    upvar \#0 $r REPLAY
+    upvar \#0 $REPLAY(obj) OBJ
+    upvar \#0 $REPLAY(db) D
+
+    # Access the class directing the content of the object.
+    set c [[$D(model) get schema] find [::uobj::type $REPLAY(obj)]]
+
+    # Create an array with the content of the update and set the
+    # resolved values back into the object. Trick the database traces
+    # by hinting them back with the exact time of the update, which
+    # will write down to complete version of the version to the
+    # database, under the same exact timestamp.
+    array set UPDATE $REPLAY(update)
+    ::uobj::keyword $REPLAY(obj) when $REPLAY(when)
+    array set OBJ [__resolv $D(model) $c UPDATE]
+
+    # Delete the replay object, it has performed its work.
+    ::uobj::delete $r
+}
+
+
+# ::db::__replay -- Schedule updates in the future
+#
+#       Periodically look into the database if there are updates for
+#       the objects that are part of the model that are scheduled to
+#       be performed in the future.  Whenever an update is discovered,
+#       create a replay object and schedule its "application" within
+#       the proper timeframe.
+#
+# Arguments:
+#	db	Database identifier context, as created by __new
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       Schedule updates to the context (and indirectly the database)
+#       in the future.
+proc ::db::__replay { db } {
+    variable DB
+    variable log
+
+    if { ![::uobj::isa $db db] } {
+	return -code error "$db unkown or wrong type"
+    }
+    upvar \#0 $db D
+
+    set now [clock seconds]
+    set updates {}
+    foreach o [$D(model) get objects] {
+	upvar \#0 $o OBJ
+	set redis [__redis $db $o]
+	if { $redis ne "" } {
+	    upvar \#0 $redis REDIS
+	    
+	    # Get all the known future timestamps for the object, we
+	    # don't look very far, only the double replay time ahead.
+	    # We take double and not the exact replay time to be sure
+	    # not to miss a timestamp while busy doing something else.
+	    set timestamps [$REDIS(redis) zrangebyscore $OBJ(uuid) \
+				$now [expr {$now+2*$D(-replay)}]]
+	    foreach ts $timestamps {
+		set r [::uobj::find [namespace current] replay \
+			   [list when == $ts] [::uobj::id $o]]
+		if { $r eq "" } {
+		    # Create a replay object that contains the raw
+		    # details of the update. We do not translate into
+		    # object space details at this point to make sure
+		    # the __replay procedure does as little job as
+		    # possible and to postpone the burden of
+		    # resolution when setting data into the current
+		    # copy of the object.
+		    set r [::uobj::new [namespace current] replay \
+			       [::uobj::id $o]]
+		    upvar \#0 $r REPLAY
+		    set REPLAY(id) $r
+		    set REPLAY(db) $db
+		    set REPLAY(obj) $o
+		    set REPLAY(when) $ts
+		    set REPLAY(update) [$REDIS(redis) hgetall $OBJ(uuid).$ts]
+		    set until [expr {1000*($ts-$now)}]
+		    set REPLAY(timer) \
+			[after $until [namespace current]::__set $r]
+		    ${log}::debug "Scheduled an update for object $o in\
+                               $until ms."
+		    lappend updates $r
+		}
+	    }
+	}
+    }
+    if { [llength $updates] > 0 } {
+	${log}::notice "Scheduled for [llength $updates] future update(s) for\
+                        objects in model"
+    }
+    
+    # Schedule next check
+    set D(replay) [after [expr {$D(-replay)*1000}] \
+		       [namespace current]::__replay $db]
+}
+
+
+# ::db::__trace -- Setup traces on object write
+#
+#       Arrange to have internal traces on write on an object (of the
+#       model) so that data from the object will be written to the
+#       database automatically whenever the object is modified.
+#
+# Arguments:
+#	db	Database context, as created by <new>
+#       o       Identifier of the object
+#
+# Results:
+#       Return the identifier of the object if a trace was setup,
+#       empty string if no trace was installed, which means that we
+#       detected that there was already a trace from us on that
+#       object.
+#
+# Side Effects:
+#       Will arrange for content of the object updates to be written
+#       to the database that is associated to the object.
+proc ::db::__trace { db o } {
+    variable DB
+    variable log
+
+    if { ![::uobj::isa $db db] } {
+	return -code error "$db unkown or wrong type"
+    }
+    upvar \#0 $db D
+
+    set found 0
+    foreach nfo [trace info variable $o] {
+	foreach {op pfx} $nfo break
+	if { [string first [namespace current]::__write $pfx] >= 0 } {
+	    set found 1
+	}
+    }
+
+    # No trace was set up, install a write trace every time the
+    # object is written.
+    if { ! $found } {
+	trace add variable $o write [list [namespace current]::__write $db]
+	return $o
+    }
+
+    return ""
+}
 
 
 # ::db::config -- Configure database context object.
@@ -534,21 +718,22 @@ proc ::db::config { db args } {
     # on write and arrange for setting them up if they are missing.
     set traced [list]
     foreach o [$D(model) get objects] {
-	set found 0
-	foreach nfo [trace info variable $o] {
-	    foreach {op pfx} $nfo break
-	    if { [string first [namespace current]::__write $pfx] >= 0 } {
-		set found 1
-	    }
-	}
-	# No trace was set up, install a write trace every time the
-	# object is written.
-	if { ! $found } {
-	    trace add variable $o write [list [namespace current]::__write $db]
+	if { [__trace $db $o] ne "" } {
 	    lappend traced $o
 	}
     }
-    ${log}::debug "Installed write traces on $traced"
+    ${log}::debug "Installed write traces on [join $traced , ]"
+
+    # Arrange to replay values that might have been set in the future
+    # at an earlier time.
+    if { $D(-replay) <= 0 } {
+	if { $D(replay) ne "" } {
+	    after cancel $D(replay)
+	}
+    }
+    if { $D(replay) eq "" && $D(-replay) > 0 } {
+	set D(replay) [after idle [namespace current]::__replay $db]
+    }
 
     return $result
 }
@@ -588,9 +773,16 @@ proc ::db::new { mdl args } {
     set D(self) $db;    # Ourselves
     set D(model) $mdl;  # The model that we are bound to
     set D(redis) "";    # Connection to main REDIS database
+    set D(replay) "";   # Identifier of the replay timer
+
+    # Listen to events on the schema to discover new objects that
+    # would be created later.  This is essential to arrange for the
+    # content of updates to be pushed into the database.
+    ::event::bind [$mdl get schema] New \
+	[list [namespace current]::__trace $db %i]
 
     ::uobj::inherit DB D
-    ::uobj::objectify $db [list [list config configure] get [list settle set]]
+    ::uobj::objectify $db [list [list config configure] get]
     
     eval config $db $args
 
