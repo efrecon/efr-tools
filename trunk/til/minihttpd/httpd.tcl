@@ -202,7 +202,6 @@ proc ::minihttpd::new {root port args} {
 			       -server [list ::minihttpd::__accept $port]\
 			       $port]} \
 		  sock] } {
-	    puts $::errorInfo
 	    ${log}::warn "Cannot serve on $port: $sock"
 	    return -1
 	}
@@ -485,6 +484,34 @@ proc ::minihttpd::__tokenise_query { qry } {
 }
 
 
+proc ::minihttpd::__starve { port sock } {
+    variable HTTPD
+    variable log
+
+    set idx [lsearch $HTTPD(servers) $port]
+    if { $idx >= 0 } {
+	set varname "::minihttpd::Server_${port}"
+	upvar \#0 $varname Server
+	
+	set idx [lsearch $Server(clients) $sock]
+	if { $idx >= 0 } {
+	    set varname "::minihttpd::Client_${port}_${sock}"
+	    upvar \#0 $varname Client
+	    
+	    if { [eof $sock] } {
+		__push $port $sock
+	    }
+
+	    if { [catch {read $sock} data] } {
+		__push $port $sock
+	    } else {
+		append Client(data) $data
+	    }
+	}
+    }
+}
+
+
 # ::minihttpd::__pull -- Pull data from client
 #
 #	Read, understand and treat requests coming from clients.
@@ -552,11 +579,9 @@ proc ::minihttpd::__pull { port sock } {
 		    0,mime,POST   {
 			set Client(state) query
 			set Client(data) ""
-			if { [array names Client "mime,content-length"] != ""} {
-			    set Client(data) \
-				[read $sock $Client(mime,content-length)]
-			    __push $port $sock
-			}
+			fconfigure $sock -buffering none
+			fileevent $sock readable \
+			    [list ::minihttpd::__starve $port $sock]
 		    }
 		    1,mime,POST   -
 		    1,mime,HEAD   -
@@ -572,15 +597,10 @@ proc ::minihttpd::__pull { port sock } {
 		    -1,query,POST {
 			if { $Client(data) != "" } {
 			    __push $port $sock
-			} elseif { [array names Client \
-					"mime,content-length"] != ""} {
-			    set Client(data) \
-				[read $sock $Client(mime,content-length)]
-			    __push $port $sock
 			} else {
-			    __translog $port $sock Error \
-				"No details about the lenght of POSTed data!"
-			    __push_error $port $sock 404 ""
+			    fconfigure $sock -buffering none
+			    fileevent $sock readable \
+				[list ::minihttpd::__starve $port $sock]
 			}
 		    }
 		    default {
@@ -977,7 +997,11 @@ proc ::minihttpd::__push { port sock } {
 	if { $idx >= 0 } {
 	    set varname "::minihttpd::Client_${port}_${sock}"
 	    upvar \#0 $varname Client
-	    
+
+	    # Stop listening for incoming data from client at this
+	    # stage!
+	    fileevent $sock readable ""
+
 	    # Check authorisation of client, a non-empty string will
 	    # mean to reject the request and contains the realm to use
 	    # for mediating this as part of the transaction.
