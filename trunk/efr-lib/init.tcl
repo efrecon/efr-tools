@@ -344,7 +344,7 @@ proc ::init::dependencies { } {
     upvar \#0 [lindex $INIT(inits) end] ARGS
     upvar \#0 $ARGS(-store) GLBL
 
-    $GLBL(log)::debug "Arranging to access $ARGS(-depends)..."
+    $GLBL(log)::info "Arranging to access $ARGS(-depends)..."
     foreach l $ARGS(-depends) {
 	::argutil::accesslib $l
 	if { $ARGS(-splash) ne "" } {
@@ -378,7 +378,7 @@ proc ::init::modules { } {
     upvar \#0 [lindex $INIT(inits) end] ARGS
     upvar \#0 $ARGS(-store) GLBL
 
-    $GLBL(log)::debug "Loading modules $ARGS(-load)..."
+    $GLBL(log)::info "Loading modules $ARGS(-load)..."
     foreach m $ARGS(-load) {
 	if { [lsearch $ARGS(-quiet) $m] < 0 } {
 	    $GLBL(log)::debug "Loading module $m at verbosity $GLBL(verbose)"
@@ -392,6 +392,50 @@ proc ::init::modules { } {
 	    ::splash::progress $ARGS(splash) "Loaded $m"
 	}
     }
+}
+
+
+# ::init::sources -- Initialise direct sources
+#
+#       Directly source a number of files into the application.  These
+#       typically are files that are part of the main application but
+#       still have not been properly packaged. The files path are
+#       relative to th lib directory of the application.
+#
+# Arguments:
+#	-- none -- Takes value from latest inited application
+#
+# Results:
+#       Return the list of path to the files that were properly sourced.
+#
+# Side Effects:
+#       Load modules into memory and set their verbosity level.
+proc ::init::sources { } {
+    variable INIT
+    variable libdir
+
+    # Access global array containing options.
+    upvar \#0 [lindex $INIT(inits) end] ARGS
+    upvar \#0 $ARGS(-store) GLBL
+
+    $GLBL(log)::info "Loading direct sources $ARGS(-sources)..."
+    set sourced {}
+    foreach f $ARGS(-sources) {
+	if { [file extension $f] eq "" } {
+	    append f .tcl
+	}
+	set fname [file join $libdir $f]
+	$GLBL(log)::debug "Loading direct source $fname"
+	if { [catch {source $fname} err] } {
+	    $GLBL(log)::error "Could not load source $fname: $err"
+	} else {
+	    lappend sourced $fname
+	}
+	if { $ARGS(-splash) ne "" } {
+	    ::splash::progress $ARGS(splash) "Loaded $fname"
+	}
+    }
+    return $sourced
 }
 
 
@@ -422,7 +466,7 @@ proc ::init::packages { } {
     upvar \#0 [lindex $INIT(inits) end] ARGS
     upvar \#0 $ARGS(-store) GLBL
 
-    $GLBL(log)::debug "Requiring packages $ARGS(-packages)..."
+    $GLBL(log)::info "Requiring packages $ARGS(-packages)..."
     set reqs {}
     foreach pkg $ARGS(-packages) {
 	if { [llength $pkg] > 1 } {
@@ -457,11 +501,12 @@ proc ::init::packages { } {
 #                  to the name of the program, in upper case.
 #       -log       Name of the program for its logger module.
 #       -options   list of options that can be given to the cmdline module.
-#       -depends   List of modules that we depend on, but have no log facility
+#       -depends   List of pkg & modules that we depend on, localised elsewhere
 #       -load      List of packages that should be loaded at proper log level.
 #       -quiet     List of packages to keep at their default loglevel (subset
 #                  of the -load list).
 #       -packages  List of external packages to load in.
+#       -sources   List of files to directly source
 #       -parsed    Callback to call once options have been parsed and global
 #                  variable initialised with their values.
 #       -loaded    Callback to call once all necessary modules and packages
@@ -588,6 +633,9 @@ proc ::init::init { args } {
 	    -st* {
 		set ARGS(-store) $val
 	    }
+	    -so* {
+		set ARGS(-sources) $val
+	    }
 	    -sp* {
 		set ARGS(-splash) $val
 	    }
@@ -653,6 +701,7 @@ proc ::init::init { args } {
 	set splash [::splash::new \
 			-progress [expr { $ARGS(-progress) \
 					      + 4 \
+					      + [llength $ARGS(-sources)] \
 					      + [llength $ARGS(-depends)] \
 					      + [llength $ARGS(-load)] \
 					      + [llength $ARGS(-packages)]}] \
@@ -681,6 +730,7 @@ proc ::init::init { args } {
     # Arrange for accessing libraries and loading in packages of various
     # sorts.
     dependencies
+    sources
     modules
     packages
     if { $ARGS(-outlog) ne "" } {
