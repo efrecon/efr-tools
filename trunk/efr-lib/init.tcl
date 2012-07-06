@@ -37,6 +37,7 @@ namespace eval ::init {
 	    argv0        ""
 	    argv         ""
 	    argv_copied  0
+	    inits        {}
 	}
 	variable forced_opts {
 	    { verbose.alpha "warn" "Verbosity level" }
@@ -221,33 +222,223 @@ proc ::init::argv {} {
 }
 
 
-proc ::init::__readargs { store options load } {
+# ::init::arguments -- Override command-line arguments with file contents
+#
+#       Read the content of the files that are pointed at by the
+#       arguments command line option and override the content of the
+#       command line options. While this feels awkward at first, it
+#       allows automated installations that easily write a number of
+#       options to one or several files, letting an application
+#       picking up its defaults to a number of known locations.
+#
+# Arguments:
+#	-- none -- Takes value from latest inited application
+#
+# Results:
+#       Return the list of file paths containing command line options
+#       that were successfully read and parsed.
+#
+# Side Effects:
+#       Reinitialise application verbosity level since this might be
+#       one of the options that was modified
+proc ::init::arguments { } {
     variable INIT
     variable libdir
 
-    upvar \#0 $store GLBL
+    # Access global array containing options.
+    upvar \#0 [lindex $INIT(inits) end] ARGS
+    upvar \#0 $ARGS(-store) GLBL
 
     # Read arguments from file if any, adapt verbosity if necessary
+    set argfiles {}
     foreach fname $GLBL(arguments) {
 	set arg_fname [::diskutil::fname_resolv $fname]
 	if { [file exists $arg_fname] } {
 	    $GLBL(log)::notice \
 		"Overriding program arguments with content of $arg_fname"
 	    if { [catch {::uobj::deserialize GLBL $arg_fname \
-			     [::argutil::options $options]} \
+			     [::argutil::options $ARGS(-options)]} \
 		      argset] == 0 } {
 		if { [lsearch $argset "verbose"] >= 0 } {
 		    $GLBL(log)::warn "Fixing log level to $GLBL(verbose)"
-		    foreach m $load {
+		    foreach m $ARGS(-load) {
 			${m}::loglevel $GLBL(verbose)
 		    }
 		    $GLBL(log)::setlevel $GLBL(verbose)
 		}
+		lappend argfiles $fname
 	    } else {
 		$GLBL(log)::warn "Error when reading arguments: $argset"
 	    }
 	}
     }
+    return $argfiles
+}
+
+
+# ::init::configuration -- Read configuration for modules
+#
+#       Read the configuration files for module-specific
+#       configuration.  The configuration files are listed under the
+#       config index of the global array containing application state.
+#
+# Arguments:
+#	glbl_p	"Pointer" to global array containing application state.
+#               If empty, will pick it from latest inited application.
+#
+# Results:
+#       Return the list of file paths that were read and considered
+#       for module configuration, in their order of reading.
+#
+# Side Effects:
+#       Actively modify defaults for module using their defaults
+#       procedures
+proc ::init::configuration { { glbl_p "" } } {
+    variable INIT
+
+    # Access global array containing options.
+    if { $glbl_p eq "" } {
+	upvar \#0 [lindex $INIT(inits) end] ARGS
+	upvar \#0 $ARGS(-store) GLBL
+    } else {
+	upvar $glbl_p GLBL
+    }
+
+    # Read configuration files for module-based settings
+    set configs {}
+    $GLBL(log)::debug "Read modules configuration from config files"
+    foreach fname $GLBL(config) {
+	set fname [::diskutil::fname_resolv $fname]
+	if { [file exists $fname] } {
+	    $GLBL(log)::notice "Reading options from $fname"
+	    ::uobj::readconfig $fname
+	    lappend configs $fname
+	}
+    }
+
+    return $configs
+}
+
+
+# ::init::dependencies -- Arrange for library access
+#
+#       Arrange to access libraries that this application depends on.
+#       Accessing the libraries is a mix of modifying the auto_path,
+#       but also copying libraries that contain dynamic libraries
+#       outside of starpacks so that they can be loaded by the
+#       operating system.
+#
+# Arguments:
+#	-- none -- Takes value from latest inited application
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       Modifies auto_path and copied to temporary location on disk,
+#       see ::argutil::accesslib
+proc ::init::dependencies { } {
+    variable INIT
+
+    # Access global array containing options.
+    upvar \#0 [lindex $INIT(inits) end] ARGS
+    upvar \#0 $ARGS(-store) GLBL
+
+    $GLBL(log)::debug "Arranging to access $ARGS(-depends)..."
+    foreach l $ARGS(-depends) {
+	::argutil::accesslib $l
+	if { $ARGS(-splash) ne "" } {
+	    ::splash::progress $ARGS(splash) "Accessed $l"
+	}
+    }
+}
+
+
+# ::init::modules -- Initialise modules
+#
+#       Load modules that this application depends on into the
+#       application.  Modules are packages that comply to the coding
+#       standards established by the TIL.  Mainly, this implies a
+#       logging mechanism that can be controlled and a defaults
+#       procedure for setting default options of objects that would be
+#       created by the module.
+#
+# Arguments:
+#	-- none -- Takes value from latest inited application
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       Load modules into memory and set their verbosity level.
+proc ::init::modules { } {
+    variable INIT
+
+    # Access global array containing options.
+    upvar \#0 [lindex $INIT(inits) end] ARGS
+    upvar \#0 $ARGS(-store) GLBL
+
+    $GLBL(log)::debug "Loading modules $ARGS(-load)..."
+    foreach m $ARGS(-load) {
+	if { [lsearch $ARGS(-quiet) $m] < 0 } {
+	    $GLBL(log)::debug "Loading module $m at verbosity $GLBL(verbose)"
+	    ::argutil::loadmodules $m $GLBL(verbose)
+	} else {
+	    $GLBL(log)::debug "Loading module $m at default verbosity"
+	    ::argutil::loadmodules $m
+	}
+	::argutil::fix_outlog
+	if { $ARGS(-splash) ne "" } {
+	    ::splash::progress $ARGS(splash) "Loaded $m"
+	}
+    }
+}
+
+
+# ::init::packages -- Initialise packages
+#
+#       Initialises regular Tcl/Tk packages that this application
+#       might depend on by loading them into memory.  The list of
+#       packages is taken from the -packages index that was given to
+#       the initialisation routine.  List items are either a package
+#       name, or a list formed by a package name and its minimal
+#       version number.
+#
+# Arguments:
+#	-- none -- Takes value from latest inited application
+#
+# Results:
+#       Return a list of pairs, each pair being the name of the
+#       package and the version number of the instance that was
+#       required and sourced.
+#
+# Side Effects:
+#       Requires packages, respecting version number directives if
+#       present.
+proc ::init::packages { } {
+    variable INIT
+
+    # Access global array containing options.
+    upvar \#0 [lindex $INIT(inits) end] ARGS
+    upvar \#0 $ARGS(-store) GLBL
+
+    $GLBL(log)::debug "Requiring packages $ARGS(-packages)..."
+    set reqs {}
+    foreach pkg $ARGS(-packages) {
+	if { [llength $pkg] > 1 } {
+	    foreach {pkg v} $pkg break
+	    set ver [package require $pkg $v]
+	} else {
+	    set ver [package require $pkg]
+	}
+	lappend reqs $pkg $ver
+	$GLBL(log)::debug "Loaded package $pkg at version $ver"
+	if { $ARGS(-splash) ne "" } {
+	    ::splash::progress $ARGS(splash) "Required $pkg ($ver)"
+	}
+    }
+
+    return $reqs
 }
 
 
@@ -307,6 +498,7 @@ proc ::init::init { args } {
     # Generate context for this initialisation
     set argstore ::init::args[incr INIT(idgene)]
     upvar \#0 $argstore ARGS
+    lappend INIT(inits) $argstore
 
     # Initialised arguments to init with defaults, most of them is
     # just copying, some others need to be dynamic.
@@ -468,6 +660,9 @@ proc ::init::init { args } {
 			-hideall on \
 			-imgfile $splash_fname \
 			-alpha 0.9]
+	set ARGS(splash) $splash
+    } else {
+	set ARGS(splash) ""
     }
 
     # Initialise local logging facility
@@ -485,42 +680,9 @@ proc ::init::init { args } {
     
     # Arrange for accessing libraries and loading in packages of various
     # sorts.
-    $GLBL(log)::debug "Arranging to access $ARGS(-depends)..."
-    foreach l $ARGS(-depends) {
-	::argutil::accesslib $l
-	if { $ARGS(-splash) ne "" } {
-	    ::splash::progress $splash "Accessed $l"
-	}
-    }
-    $GLBL(log)::debug "Loading modules $ARGS(-load)..."
-    foreach m $ARGS(-load) {
-	if { [lsearch $ARGS(-quiet) $m] < 0 } {
-	    $GLBL(log)::debug "Loading module $m at verbosity $GLBL(verbose)"
-	    ::argutil::loadmodules $m $GLBL(verbose)
-	} else {
-	    $GLBL(log)::debug "Loading module $m at default verbosity"
-	    ::argutil::loadmodules $m
-	}
-	::argutil::fix_outlog
-	if { $ARGS(-splash) ne "" } {
-	    ::splash::progress $splash "Loaded $m"
-	}
-    }
-
-    $GLBL(log)::debug "Requiring packages $ARGS(-packages)..."
-    foreach pkg $ARGS(-packages) {
-	if { [llength $pkg] > 1 } {
-	    foreach {pkg v} $pkg break
-	    set ver [package require $pkg $v]
-	} else {
-	    set ver [package require $pkg]
-	}
-	$GLBL(log)::debug "Loaded package $pkg at version $ver"
-	if { $ARGS(-splash) ne "" } {
-	    ::splash::progress $splash "Required $pkg ($ver)"
-	}
-    }
-
+    dependencies
+    modules
+    packages
     if { $ARGS(-outlog) ne "" } {
 	::argutil::logcb $ARGS(-outlog)
     }
@@ -531,7 +693,7 @@ proc ::init::init { args } {
     # initialisation, we read in the arguments ONCE before calling
     # back in order to get some proper defaults anyhow.
     $GLBL(log)::debug "Initialising to default arguments"
-    __readargs $ARGS(-store) $ARGS(-options) $ARGS(-load)
+    arguments
     if { $ARGS(-loaded) ne "" } {
 	$GLBL(log)::debug "Give a chance to callers to modify arguments"
 	if { [catch {eval $ARGS(-loaded) $ARGS(-store) $argstore} err] } {
@@ -541,7 +703,7 @@ proc ::init::init { args } {
 
     # Read arguments from file if any, adapt verbosity if necessary
     $GLBL(log)::debug "Now read definitive program arguments list"
-    __readargs $ARGS(-store) $ARGS(-options) $ARGS(-load)
+    arguments
     if { $ARGS(-splash) ne "" } {
 	::splash::progress $splash "Arguments read and parsed"
     }
@@ -564,14 +726,7 @@ proc ::init::init { args } {
     }
 
     # Read configuration files for module-based settings
-    $GLBL(log)::debug "Read modules configuration from config files"
-    foreach fname $GLBL(config) {
-	set fname [::diskutil::fname_resolv $fname]
-	if { [file exists $fname] } {
-	    $GLBL(log)::notice "Reading options from $fname"
-	    ::uobj::readconfig $fname
-	}
-    }
+    configuration GLBL
     if { $ARGS(-splash) ne "" } {
 	::splash::progress $splash "Application configured"
     }
@@ -657,7 +812,7 @@ proc ::init::debughelper {} {
 	foreach root $additional {
 	    if { [file isdirectory $root] } {
 		# Manually add accessible Tcl/Tk libraries, if any
-		foreach v [list 8.5 8.4 8.3 8.2 8.1 8.0] {
+		foreach v [list 8.6 8.5 8.4 8.3 8.2 8.1 8.0] {
 		    set d [file join $root lib tcl$v]
 		    if { [file isdirectory $d] } {
 			lappend auto_path $d
