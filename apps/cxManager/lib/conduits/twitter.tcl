@@ -31,14 +31,15 @@ namespace eval ::twitter {
 	    context          ""
 	    servers          {}
 	    initdone         0
-	    -consumer_key    "7UJf9qmYhRyyPD1zl6kjg"
-	    -consumer_secret "4oKkzBQWyrLE1GoBkuLPso1J7T6JsA6MMNwI7UdNeIs"
-	    -access_token   "550404598-OXMimlgOXzrTun3VEcvxRiS0UIVkDQ00N5o3q3hM"
-	    -access_secret   "9Qz21PDrm3vpqTVBlph6nCa65ZjJKsMj8BAj8XRiQYY"
+	    -consumer_key    ""
+	    -consumer_secret ""
+	    -access_token    ""
+	    -access_secret   ""
 	    -timeout         10000
 	    apiroot          "https://api.twitter.com/1"
 	}
 	::uobj::install_log twitter TWT
+	::uobj::install_defaults twitter TWT
     }
 }
 

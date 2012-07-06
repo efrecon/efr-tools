@@ -18,6 +18,7 @@ namespace eval ::upnp {
 	    -retry       10
 	}
 	::uobj::install_log upnp UPNP
+	::uobj::install_defaults upnp UPNP
     }
 }
 

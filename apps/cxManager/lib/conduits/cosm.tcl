@@ -28,6 +28,7 @@ namespace eval ::cosm {
 	    -retries       10
 	}
 	::uobj::install_log cosm COSM
+	::uobj::install_defaults cosm COSM
     }
 }
 
