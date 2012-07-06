@@ -30,6 +30,7 @@ namespace eval ::rcontext {
 	    -timeout       30000
 	}
 	::uobj::install_log rcontext RCX
+	::uobj::install_defaults rcontext RCX
     }
 }
 

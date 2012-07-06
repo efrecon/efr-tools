@@ -17,6 +17,7 @@ namespace eval ::gcal {
 	    -chunk      25
 	}
 	::uobj::install_log gcal GCAL
+	::uobj::install_defaults gcal GCAL
     }
 }
 
