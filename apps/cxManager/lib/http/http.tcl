@@ -540,7 +540,12 @@ proc http::geturl {url args} {
 	append url $user
 	append url @
     }
-    append url $host
+    set octets [split $host :]
+    if { [llength $octets] >= 4 && [llength $octets] <= 8 } {
+	append url \[$host\]
+    } else {
+	append url $host
+    }
     if {$port != $defport} {
 	append url : $port
     }

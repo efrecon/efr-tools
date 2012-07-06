@@ -15,7 +15,7 @@ set options {
 
 array set CM {
     logfd       ""
-    debug       0
+    debug       1
     cx          ""
     realm       "me3gas Context Engine"
     comments    "\#!;"
@@ -60,8 +60,25 @@ proc ::init:fix { glbl args } {
     if { $tcl_platform(platform) eq "windows" } {
 	lappend ARGS(-packages) registry
     }
+
 }
 
+proc ::init:tls { glbl args } {
+    global CM
+
+    # Arrange for a nice fallback in case we haven't got access to TLS,
+    # thus no https connections.
+    if { [catch {package require tls} err] } {
+	$CM(log)::error "Will not be able to provide secured connections!\
+                         (reason: $err)"
+	set CM(port) [string map [list "https:" "http:"] $CM(port)]
+	$CM(log)::warn "Forcedly replaced all HTTPS serving ports to HTTP!"
+	set CM(https) 0
+    } else {
+	set CM(https) 1
+	$CM(log)::notice "HTTPS supported, all green!"
+    }
+}
 
 # ::log:out -- Output log to file and log window
 #
@@ -116,32 +133,17 @@ proc log:out {dt srv lvl str} {
     -depends [list event uuidhash oauth rest redis udp] \
     -load [list minihttpd schema model db ssdp UPnP cxapi] \
     -packages [list struct::tree http uuid] \
+    -sources [list json find trigger rest tree api pairing] \
     -parsed ::init:fix \
+    -loaded ::init:tls \
     -outlog ::log:out
 
-# Arrange for a nice fallback in case we haven't got access to TLS,
-# thus no https connections.
-if { [catch {package require tls} err] } {
-    $CM(log)::error "Will not be able to provide secured connections!\
-                     (reason: $err)"
-    set CM(port) [string map [list "https:" "http:"] $CM(port)]
-    $CM(log)::warn "Forcedly replaced all HTTPS serving ports to HTTP!"
-    set CM(https) 0
-} else {
-    set CM(https) 1
-}
-
-
-# Source unpackaged, but mostly well separated modules.
-foreach module [list json find trigger rest tree api pairing] {
-    source [file join $::init::libdir ${module}.tcl]
-}
 set dir [file join $::init::libdir conduits]
 foreach f [glob -directory $dir -nocomplain -tails -- *.tcl] {
     source [file join $dir $f]
     lappend CM(conduits) [file rootname $f]
 }
-
+::init::configuration;   # Re-configure again to configure the conduits!
 
 proc ::net:httpd { port { pki "" } } {
     global CM
