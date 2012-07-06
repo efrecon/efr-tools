@@ -293,13 +293,13 @@ proc ::db::__resolv { m c updt_p } {
 		    if { [$f get -multi] } {
 			set RETURN(-$fname) {}
 			foreach v $UPDATE($fname) {
-			    set vo [$D(model) find $v]
+			    set vo [$m find $v]
 			    if { $vo ne "" } {
 				lappend RETURN(-$fname) $vo
 			    }
 			}
 		    } else {
-			set RETURN(-$fname) [$D(model) find $UPDATE($fname)]
+			set RETURN(-$fname) [$m find $UPDATE($fname)]
 		    }
 		} else {
 		    set RETURN(-$fname) $UPDATE($fname)
