@@ -311,8 +311,8 @@ schema          = *(object-def / comment / empty-line)
 }}}
 
 There are some extra checks that are performed during the parsing. However, these are based on the schema specification and fall outside of the BNF description of the model. These checks should be as follows:
-  * Within an instance definition, only fields which are directly specified for the class in the schema or inherited by the class should appear.
-￼  * The rule {{{field-list}}} above can only appear for fields that have been specified as arrays in the schema.
+  * Within an instance definition, only fields which are directly specified for the class in the schema or inherited by the class should appear
+  * The rule {{{field-list}}} above can only appear for fields that have been specified as arrays in the schema.
   * It is not possible to mix types in an array.
   * Values that fall off the constraint definition will not be allowed.
 
@@ -325,15 +325,15 @@ It is acceptable not to specify the value of a given field, in which case it wil
   * The default UUID is an automatically generated UUID of type 4.
   * The default array is empty.
 
-= Web Service API =￼
+= Web Service API =
 
 The web service API supported by the context engine accepts REST calls and respond to these calls solely using JSON constructs. The “tree” of the calls is organised as follows:
   * {{{/context}}} provides access to the context itself, i.e. getting information about the classes, the objects of the objects, but also setting their value or registering actions to be performed whenever values are modified (see trigger below). Individual items are encapsulated under {{{/context/UUID}}}, where UUID should be replaced by the UUID of a class or an object.
   * {{{/trigger}}} is the sub-tree that supports long-lived connections to generic external web-services. This sub-tree is for querying, destroying and triggering manually existing triggers.
   * {{{/find}}}, {{{/locate}}} and {{{/topmost}}} are root level trees for find objects within the context and traversing the hierarchy that it forms￼.
-  * {{{/conduits}}} is the tree that encapsulates all plug in conduits that are made available to talk to external well-known web-services, thus encapsulating logic specific to these services. 
+  * {{{/conduits}}} is the tree that encapsulates all plug in conduits that are made available to talk to external well-known web-services, thus encapsulating logic specific to these services.
 
-￼￼￼== Accessing Objects ==￼
+== Accessing Objects ==￼
 
 ￼￼=== /context ===
 
