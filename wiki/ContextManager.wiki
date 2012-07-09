@@ -330,14 +330,14 @@ It is acceptable not to specify the value of a given field, in which case it wil
 The web service API supported by the context engine accepts REST calls and respond to these calls solely using JSON constructs. The “tree” of the calls is organised as follows:
   * {{{/context}}} provides access to the context itself, i.e. getting information about the classes, the objects of the objects, but also setting their value or registering actions to be performed whenever values are modified (see trigger below). Individual items are encapsulated under {{{/context/UUID}}}, where UUID should be replaced by the UUID of a class or an object.
   * {{{/trigger}}} is the sub-tree that supports long-lived connections to generic external web-services. This sub-tree is for querying, destroying and triggering manually existing triggers.
-  * {{{/find}}}, {{{/locate}}} and {{{/topmost}}} are root level trees for find objects within the context and traversing the hierarchy that it forms￼.
+  * {{{/find}}}, {{{/locate}}} and {{{/topmost}}} are root level trees for find objects within the context and traversing the hierarchy that it forms.
   * {{{/conduits}}} is the tree that encapsulates all plug in conduits that are made available to talk to external well-known web-services, thus encapsulating logic specific to these services.
 
-== Accessing Objects ==￼
+== Accessing Objects ==
 
-￼￼=== /context ===
+=== /context ===
 
-This operation does not take any REST arguments and return a JSON array containing a full description of the content of the context and of its current values. Each object in the array ￼￼represents an object of the context and is returned as a JSON array. The JSON array contains the following fields:
+This operation does not take any REST arguments and return a JSON array containing a full description of the content of the context and of its current values. Each object in the array represents an object of the context and is returned as a JSON array. The JSON array contains the following fields:
   * reference is the name of the reference to the object as from the model file that was read to initialize the context. This can never be used for queries and only exists for enabling a matching against the content of the initial file when debugging or looking for possible problems.
   * uuid is the UUID of the object.
   * class is the UUID of the class that describes the object.
@@ -387,12 +387,11 @@ An example output is provided below; actual context descriptions are usually muc
 ]
 }}}
 
-
-￼￼=== /context/UUID ===
+=== /context/UUID ===
 
 In this call, the UUID of the class or object is taken implicitly from the path. This operation accepts the following REST arguments:
   * {{{uuid}}}, the UUID of the object or the class to request information for, in which case the UUID part of the path can be omitted.
-  * ￼{{{when}}} specifies a timestamp in the past for which we want to request the data for. This only works for objects and is explained in further details below.
+  * {{{when}}} specifies a timestamp in the past for which we want to request the data for. This only works for objects and is explained in further details below.
 
 The call returns a JSON array containing the current value of the object requested or of the class. For objects, this is the same as the value from the operation above. For classes, it is a JSON array with the following fields:
   * name is the name of the class
