@@ -519,10 +519,10 @@ restricting the search to parts of the context. For two strings to
 match, their contents must be identical except that the following
 special sequences may appear in the pattern:
 
-  * "*" Matches any sequence of characters in the string, including a null string.
-  * "?" Matches any single character in the string.
-  * "[chars]" Matches any character in the set given by chars. If a sequence of the form x-y appears in chars, then any character between x and y, inclusive, will match.
-  * "\x" Matches the single character x. This provides a way of avoiding the special interpretation of the characters *?[]\ in the pattern.
+  * {{{*}}} Matches any sequence of characters in the string, including a null string.
+  * {{{?}}} Matches any single character in the string.
+  * {{{[chars]}}} Matches any character in the set given by chars. If a sequence of the form {{{x-y}}} appears in chars, then any character between {{{x}}} and {{{y}}}, inclusive, will match.
+  * {{{\x}}} Matches the single character {{{x}}}. This provides a way of avoiding the special interpretation of the characters {{{*?[]\}}} in the pattern.
 
 === /find ===
 
