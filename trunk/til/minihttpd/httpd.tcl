@@ -16,12 +16,15 @@ package require diskutil
 package require http
 package require base64
 package require html
+package require sha1
 #package require tls; # We will request it on demand to make this a
 #soft constraint on the HTTP package.
 
 package provide minihttpd 1.2
+
 package require minihttpd::dirlist
 package require minihttpd::validate
+package require minihttpd::websocket
 
 namespace eval ::minihttpd {
     # Initialise the global state
@@ -34,6 +37,7 @@ namespace eval ::minihttpd {
 	    servers          ""
 	    dateformat       "\[%d%m%y %H:%M:%S\]"
 	    validate_timeout 250
+	    ws_magic         "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 	    -default         "index.htm index.html"
 	    -dirlist         "*"
 	    -logfile         ""
@@ -209,7 +213,7 @@ proc ::minihttpd::new {root port args} {
 	# A negative port was passed, that means we should choose a
 	# suitable port.  Start from the default port and increase by
 	# 2 until we find an available port.  This could be an
-	# infinite loop by WTH!
+	# infinite loop but WTH!
 	set sock ""
 	set port $HTTPD(default_port)
 	set attempts 0
@@ -245,7 +249,8 @@ proc ::minihttpd::new {root port args} {
     set Server(clients) {}
     set Server(listen) $sock
     set Server(selfvalidation_urls) {}
-    set Server(handlers) {}
+    set Server(handlers) {};     # External handlers for AJAX comm.
+    set Server(live) {};         # Web Sockets handlers.
     set Server(protocol) $proto
     set Server(socket_cmd) $socket_cmd
     foreach opt [array names HTTPD "-*"] {
@@ -571,7 +576,7 @@ proc ::minihttpd::__pull { port sock } {
 		
 		set state \
 		    [string compare $readCount 0],$Client(state),$Client(proto)
-		#puts "REQ: $line ==> STATE: $state"
+		# puts "REQ: $line ==> STATE: $state"
 		switch -- $state {
 		    0,mime,GET  -
 		    0,mime,HEAD -
@@ -969,6 +974,74 @@ proc ::minihttpd::__handler_list { port } {
 }
 
 
+
+proc ::minihttpd::__web_socket { port sock } {
+    variable HTTPD
+    variable log
+
+    set idx [lsearch $HTTPD(servers) $port]
+    if { $idx >= 0 } {
+	set varname "::minihttpd::Server_${port}"
+	upvar \#0 $varname Server
+	
+	set idx [lsearch $Server(clients) $sock]
+	if { $idx >= 0 } {
+	    set varname "::minihttpd::Client_${port}_${sock}"
+	    upvar \#0 $varname Client
+
+	    set Client(live) "";  # Marker, will be set to handler if
+				  # we have a working WS to respond.
+
+	    # Are we upgrading the connection to a web socket?
+	    if { [array names Client "mime,connection"] != "" \
+		 && [string equal -nocase \
+			 $Client(mime,connection) "UPGRADE"] } {
+		if { [array names Client "mime,upgrade"] != "" \
+			 && [string equal -nocase \
+				 $Client(mime,upgrade) "WEBSOCKET"] } {
+		    # Compute security handshake
+		    set sec $Client(mime,sec-websocket-key)$HTTPD(ws_magic)
+		    set accept [base64::encode [sha1::sha1 -bin $sec]]
+		    
+		    # Extract application protocols looked for
+		    set protos {}
+		    if { [array names Client "mime,sec-websocket-protocol"] \
+			     != "" } {
+			set protos \
+			    [split $Client(mime,sec-websocket-protocol) ","]
+		    }
+		    
+		    # Search amongst existing WS handlers for one that
+		    # responds to that URL and implement one of the
+		    # protocols.
+		    foreach { ptn cb proto } $Server(live) {
+			set idx [lsearch -glob -nocase $protos $proto]
+			if { [string match -nocase $ptn $Client(url)] \
+				 && ( $protos == "" || $idx >= 0 ) } {
+			    # Found it! Mark in the client map using
+			    # the "live" index.
+			    set Client(ws_protocol) ""
+			    if { $idx >= 0 } {
+				set Client(ws_protocol) [lindex $protos $idx]
+			    }
+			    set Client(live) $cb
+			    set Client(ws_accept) $accept
+			    break
+			}
+		    }
+		}
+	    }
+	} else {
+	    ${log}::warn "$sock is not a recognised client of $port"
+	}
+    } else {
+	${log}::warn "Not listening for HTTP connections on $port!"
+    }
+
+    return 0
+}
+
+
 # ::minihttpd::__push -- Push answer back to client.
 #
 #	Arrange for answer to be sent back to a client, most of the
@@ -1035,6 +1108,9 @@ proc ::minihttpd::__push { port sock } {
 		}
 	    }
 
+	    # Convert the socket to a web socket if appropriate.
+	    __web_socket $port $sock
+	    
 	    if { $Client(handler) == "" } {
 		set mypath ""
 		set myurl [fullurl $port $Client(url) mypath]
@@ -1057,7 +1133,21 @@ proc ::minihttpd::__push { port sock } {
 		return
 	    }
 
-	    if { $Client(response) != "" || $Client(handler) != "" } {
+	    if { $Client(live) != "" } {
+		puts $sock "HTTP/1.1 101 Switching Protocols"
+		puts $sock "Upgrade: websocket"
+		puts $sock "Connection: Upgrade"
+		puts $sock "Sec-WebSocket-Accept: $Client(ws_accept)"
+		if { $Client(ws_protocol) != "" } {
+		    puts $sock "Sec-WebSocket-Protocol: $Client(ws_protocol)"
+		}
+		puts $sock ""
+		flush $sock
+		
+		::minihttpd::websocket::handler $port $sock $Client(live)
+		__translog $port $sock WebSocket \
+		    Forwarded connection to handler $Client(live)
+	    } elseif { $Client(response) != "" || $Client(handler) != "" } {
 		puts $sock "HTTP/1.0 200 Data follows"
 		puts $sock "Date: [__fmtdate [clock seconds]]"
 		if { [catch {file mtime $mypath} tm] } {
@@ -1197,6 +1287,7 @@ proc ::minihttpd::config { port args } {
     }
 }
 
+
 proc ::minihttpd::handler { port path cb { fmt "text/html" } } {
     variable HTTPD
     variable log
@@ -1212,6 +1303,24 @@ proc ::minihttpd::handler { port path cb { fmt "text/html" } } {
     upvar \#0 $varname Server
 
     lappend Server(handlers) $path $cb $fmt
+}
+
+
+proc ::minihttpd::live { port path cb { proto "*" } } {
+    variable HTTPD
+    variable log
+
+    # Check that this is one of our connections
+    set idx [lsearch $HTTPD(servers) $port]
+    if { $idx < 0 } {
+	${log}::warn "Server $port is not valid"
+	return -code error "Identifier invalid"
+    }
+
+    set varname "::minihttpd::Server_${port}"
+    upvar \#0 $varname Server
+
+    lappend Server(live) $path $cb $proto
 }
 
 

@@ -11,3 +11,4 @@
 package ifneeded minihttpd 1.2 [list source [file join $dir httpd.tcl]]
 package ifneeded minihttpd::dirlist 1.0 [list source [file join $dir dirlisting.tcl]]
 package ifneeded minihttpd::validate 1.0 [list source [file join $dir validate.tcl]]
+package ifneeded minihttpd::websocket 1.0 [list source [file join $dir websocket.tcl]]
