@@ -65,6 +65,7 @@ proc ::minihttpd::validate::init { port } {
 # Side Effects:
 #	Will log on disk if required
 proc ::minihttpd::validate::__self { port } {
+    variable VALIDATE
     namespace upvar [namespace parent] log log
 
     if { [[namespace parent [namespace current]]::listening $port] } {
@@ -92,6 +93,7 @@ proc ::minihttpd::validate::__self { port } {
 		    "Self validating through fetching $topurl"
 		set cmd [list ::http::geturl $topurl \
 			     -validate 1 \
+			     -timeout $VALIDATE(timeout) \
 			     -command [list [namespace current]::__root $port]]
 		if { [catch {eval $cmd} err] } {
 		    [namespace parent [namespace current]]::__log $port \
