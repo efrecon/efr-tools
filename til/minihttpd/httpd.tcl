@@ -8,7 +8,7 @@
 # of this file, and for a DISCLAIMER OF ALL WARRANTIES.
 
 
-package require Tcl 8.2
+package require Tcl 8.4
 package require logger
 package require uri
 package require mimetype
@@ -24,7 +24,7 @@ package provide minihttpd 1.2
 
 package require minihttpd::dirlist
 package require minihttpd::validate
-package require minihttpd::websocket
+package require websocket
 
 namespace eval ::minihttpd {
     # Initialise the global state
@@ -1144,7 +1144,7 @@ proc ::minihttpd::__push { port sock } {
 		puts $sock ""
 		flush $sock
 		
-		::minihttpd::websocket::handler $port $sock $Client(live)
+		::websocket::takeover $sock $Client(live) 1
 		__translog $port $sock WebSocket \
 		    Forwarded connection to handler $Client(live)
 	    } elseif { $Client(response) != "" || $Client(handler) != "" } {
