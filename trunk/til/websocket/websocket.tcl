@@ -139,9 +139,16 @@ proc ::websocket::close { sock { code 1000 } { reason "" } } {
     }
     upvar \#0 $varname Connection
 
+    if { $Connection(closed) } {
+	${log}::notice "Connection already closed"
+	return
+    }
+    set Connection(closed) 1
+
     if { $code == "" || ![string is integer $code] } {
 	send $sock 8
 	${log}::info "Closing web socket"
+	__push $sock close {}
     } else {
 	if { $reason eq "" } {
 	    set reason [string map \
@@ -162,6 +169,7 @@ proc ::websocket::close { sock { code 1000 } { reason "" } } {
 	set msg [string range $msg 0 124];  # Cut answer to make sure it fits!
 	send $sock 8 $msg
 	${log}::info "Closing web socket: $code ($reason)"
+	__push $sock close [list $code $reason]
     }
 
     __disconnect $sock
@@ -241,7 +249,9 @@ proc ::websocket::send { sock type {msg ""} {final 1}} {
     }
     upvar \#0 $varname Connection
 
-    # Determine opcode from type, i.e. text, binary or ping.
+    # Determine opcode from type, i.e. text, binary or ping. Accept
+    # integer opcodes for internal use or for future extensions of the
+    # protocol.
     set opcode -1;
     if { [string is integer $type] } {
 	set opcode $type
@@ -264,7 +274,8 @@ proc ::websocket::send { sock type {msg ""} {final 1}} {
 	    "Unrecognised type, should be one of text, binary, ping or\
              a protocol valid integer"
     }
-    
+
+    # Refuse to continue if different from last type of message.
     if { $Connection(write:opcode) > 0 } {
 	if { $opcode != $Connection(write:opcode) } {
 	    return -code error \
@@ -331,14 +342,20 @@ proc ::websocket::send { sock type {msg ""} {final 1}} {
     
 
     # Send the (masked) frame
-    puts -nonewline $sock $header$msg
-    flush $sock
+    if { [catch {
+	puts -nonewline $sock $header$msg
+	flush $sock}] } {
+	${log}::error "Could not send to remote end, closed socket?"
+	close $sock 1001
+	return -1
+    }
 
     if { [string is true $final] } {
 	${log}::debug "Sent $mlen bytes long $type final fragment to $dst"
     } else {
 	${log}::debug "Sent $mlen bytes long $type fragment to $dst"
     }
+    return [string length $header$msg]
 }
 
 
@@ -411,7 +428,12 @@ proc ::websocket::__receiver { sock } {
     # Get basic header.  Abort if reserved bits are set, unexpected
     # continuation frame, fragmented or oversized control frame, or
     # the opcode is unrecognised.
-    binary scan [read $sock 2] Su header
+    if { [catch {read $sock 2} dta] || [string length $dta] != 2 } {
+	${log}::error "Cannot read header from socket: $dta"
+	close $sock 1001
+	return
+    }
+    binary scan $dta Su header
     set opcode [expr {$header >> 8 & 0xf}]
     set mask [expr {$header >> 7 & 0x1}]
     set len [expr {$header & 0x7f}]
@@ -432,12 +454,23 @@ proc ::websocket::__receiver { sock } {
     } elseif { $opcode == 0 } {
 	set opcode $Connection(read:mode)
     }
-    
+
+
     # Get the extended length, if present
     if { $len == 126 } {
-	binary scan [read $sock 2] Su len
+	if { [catch {read $sock 2} dta] || [string length $dta] != 2 } {
+	    ${log}::error "Cannot read length from socket: $dta"
+	    close $sock 1001
+	    return
+	}
+	binary scan $dta Su len
     } elseif { $len == 127 } {
-	binary scan [read $sock 8] Wu len
+	if { [catch {read $sock 8} dta] || [string length $dta] != 2 } {
+	    ${log}::error "Cannot read length from socket: $dta"
+	    close $sock 1001
+	    return
+	}
+	binary scan $dta Wu len
     }
 
 
@@ -464,11 +497,24 @@ proc ::websocket::__receiver { sock } {
 	# Get mask and data.  Format data as a list of 32-bit integer
         # words and list of 8-bit integer byte leftovers.  Then unmask
 	# data, recombine the words and bytes, and append to the buffer.
-	binary scan [read $sock 4] Iu mask
-	set bytes [read $sock $len]
+	if { [catch {read $sock 4} dta] || [string length $dta] != 4 } {
+	    ${log}::error "Cannot read mask from socket: $dta"
+	    close $sock 1001
+	    return
+	}
+	binary scan $dta Iu mask
+	if { [catch {read $sock $len} bytes] } {
+	    ${log}::error "Cannot read fragment content from socket: $bytes"
+	    close $sock 1001
+	    return
+	}
 	append Connection(read:msg) [__mask $mask $bytes]
     } else {
-	set bytes [read $sock $len]
+	if { [catch {read $sock $len} bytes] || [string length $dta] != $len } {
+	    ${log}::error "Cannot read fragment content from socket: $bytes"
+	    close $sock 1001
+	    return
+	}
 	append Connection(read:msg) $bytes
     }
 
@@ -501,10 +547,8 @@ proc ::websocket::__receiver { sock } {
 			reason
 		    set msg [encoding convertfrom utf-8 \
 				 [string range $Connection(read:msg) 2 end]]
-		    __push $sock close [list $reason $msg]
 		    close $sock $reason $msg
 		} else {
-		    __push $sock close {}
 		    close $sock 
 		}
 		return
@@ -561,6 +605,7 @@ proc ::websocket::takeover { sock handler { server 0 } } {
     set Connection(read:mode) ""
     set Connection(read:msg) ""
     set Connection(write:opcode) -1
+    set Connection(closed) 0
 
     fconfigure $sock -translation binary -blocking on
     fileevent $sock readable [list [namespace current]::__receiver $sock]
@@ -763,7 +808,9 @@ proc ::websocket::open { url handler args } {
 		set protos $v
 	    }
 	    ti* {
-		if { [string is integer $v] } {
+		# We implement the timeout ourselves to be able to
+		# properly cleanup.
+		if { [string is integer $v] && $v > 0 } {
 		    set timeout $v
 		}
 	    }
