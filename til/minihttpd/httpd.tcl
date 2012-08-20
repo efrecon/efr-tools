@@ -502,7 +502,7 @@ proc ::minihttpd::__starve { port sock } {
 	if { $idx >= 0 } {
 	    set varname "::minihttpd::Client_${port}_${sock}"
 	    upvar \#0 $varname Client
-	    
+
 	    if { [eof $sock] } {
 		__push $port $sock
 	    }
@@ -511,6 +511,12 @@ proc ::minihttpd::__starve { port sock } {
 		__push $port $sock
 	    } else {
 		append Client(data) $data
+		if { [array names Client mime,content-length] != "" } {
+		    if { [string length $Client(data)] \
+			     >= $Client(mime,content-length) } {
+			__push $port $sock
+		    }
+		}
 	    }
 	}
     }
@@ -576,7 +582,7 @@ proc ::minihttpd::__pull { port sock } {
 		
 		set state \
 		    [string compare $readCount 0],$Client(state),$Client(proto)
-		# puts "REQ: $line ==> STATE: $state"
+		#puts "REQ: $line ==> STATE: $state"
 		switch -- $state {
 		    0,mime,GET  -
 		    0,mime,HEAD -
@@ -584,7 +590,7 @@ proc ::minihttpd::__pull { port sock } {
 		    0,mime,POST   {
 			set Client(state) query
 			set Client(data) ""
-			fconfigure $sock -buffering none
+			fconfigure $sock -buffering none -blocking 0
 			fileevent $sock readable \
 			    [list ::minihttpd::__starve $port $sock]
 		    }
@@ -603,7 +609,7 @@ proc ::minihttpd::__pull { port sock } {
 			if { $Client(data) != "" } {
 			    __push $port $sock
 			} else {
-			    fconfigure $sock -buffering none
+			    fconfigure $sock -buffering none -blocking 0
 			    fileevent $sock readable \
 				[list ::minihttpd::__starve $port $sock]
 			}
@@ -1419,7 +1425,7 @@ proc ::minihttpd::__log { port txt } {
 #
 # Side Effects:
 #	None.
-proc ::minihttpd::__push_error { port sock code errmsg { hdrs "" } } {
+proc ::minihttpd::__push_error { port sock code { errmsg "" } { hdrs "" } } {
     variable HTTPD
     variable log
     variable HTTPD_errors
@@ -1434,9 +1440,12 @@ proc ::minihttpd::__push_error { port sock code errmsg { hdrs "" } } {
 	    set varname "::minihttpd::Client_${port}_${sock}"
 	    upvar \#0 $varname Client
 
+	    if { $errmsg == "" } {
+		set errmsg $HTTPD_errors($code)
+	    }
 	    append Client(url) ""
-	    set message "<title>Error: $code</title>Error <b>$Client(url): $HTTPD_errors($code)</b>."
-	    puts $sock "HTTP/1.0 $code $HTTPD_errors($code)"
+	    set message "<title>Error: $code</title>Error <b>$Client(url): $errmsg</b>."
+	    puts $sock "HTTP/1.0 $code $errmsg"
 	    puts $sock "Date: [__fmtdate [clock seconds]]"
 	    puts $sock "Content-Length: [string length $message]"
 	    foreach { hdr val } $hdrs {
