@@ -1,15 +1,18 @@
 # We must have at least 8.6 for IPv6 support!
-package require Tcl 8.6
+package require Tcl
 
 # Implements a contiki me3gas listener that subscribes to a mote,
-# listen to its content (on UDP) and forwards data to a context
-# manager.
+# listen to its content (on UDP and/or HTTP) and forwards data to a
+# context manager.
+
+# JE IPv6 for the mote should be: 2001:5c0:1508:8d00:212:7400:101:7 it
+# offers temperature as a feature.
 
 set options {
     { logfile.arg "%APPDATA%/me3gas/%progname%.log" "Where to save log for every run" }
-    { ports.arg "http:9090 udp:6050" "Ports to listen on for incoming data, format is protocol followed by colon followed by port numer. Known protocols are udp and http" }
+    { ports.arg "http:9090 udp:6050 ws:9099" "Ports to listen on for incoming data, format is protocol followed by colon followed by port numer. Known protocols are udp, http and ws (WebSocket)" }
     { context.arg "https://localhost:8800/" "Root URL to context manager" }
-    { report.arg "2001:5c0:1508:8d00:212:7400:101:7 temperature accdf0f3-108e-56ac-446e-9b0398eeeb7a {value value date timestamp sampling sampling}" "List of serial/type matches to UUID/fieldName" }
+    { report.arg "localhost:9900 cpu accdf0f3-108e-56ac-446e-9b0398eeeb7a {value value date timestamp sampling sampling}" "List of serial/type matches to UUID/fieldName" }
     { sampling.integer "120000" "Initial sampling rate, will be computed later" }
     { myaddr.arg "" "My address, to select network interfaces. Empty to pick" }
 }
@@ -249,9 +252,10 @@ proc ::report { dev } {
     # Parse through the known reporting directives if we find one that
     # matches the sensor serial and type that we should report for.
     foreach {ip key uuid dst} $CTKI(report) {
+	foreach {ip port} [::net:ip $ip] break
 	if { $ip == $DEV(ip) && $key == $DEV(key) } {
 	    $CTKI(log)::debug "Reporting sensor $DEV(ip)/$DEV(key) to\
-                              $uuid: $DEV(value)"
+                               $uuid: $DEV(value)"
 	    # Construct a URL, based on the UUID of the receiving
 	    # object and on the field specification that is contained
 	    # in the report specification.
@@ -350,7 +354,15 @@ proc ::htreceive { prt sock url qry } {
 
     set peer [fconfigure $sock -peer]
     set data [::minihttpd::data $prt $sock]
-    ::net:receiver [lreplace $peer 1 1] $data
+    ::net:receiver [lreplace $peer 0 0] $data
+}
+
+
+proc ::wsreceive { sock type msg } {
+    global CTKI
+
+    set peer [fconfigure $sock -peer]
+    ::net:receiver [lreplace $peer 0 0] $msg
 }
 
 
@@ -377,22 +389,30 @@ proc ::dev:subscribe { dev } {
     upvar \#0 $dev DEV
     set srv [lindex [::uobj::allof [namespace current] server] 0]
     upvar \#0 $srv SERVER
-    $CTKI(log)::debug "Binding device $DEV(ip)/$DEV(key) to server\
+    $CTKI(log)::debug "Binding device $DEV(ip):$DEV(port)/$DEV(key) to server\
                        $SERVER(protocol):$SERVER(port)"
 
     # Build a dictionary that will form our request, i.e. asking the
     # mote to send back data to us on the UDP port specified in the
     # arguments.
     set registration "\{"
+    append registration "\"proto\":\"$SERVER(protocol)\","
     append registration "\"host\":\"$CTKI(myaddr)\","
     append registration "\"port\":$SERVER(port),"
-    append registration "\"path\":\"/receive![::uobj::id $dev]\","
-    append registration "\"proto\":\"$SERVER(protocol)\","
+    if { [string match "w*" $SERVER(protocol)] } {
+	append registration "\"path\":\"/push![::uobj::id $dev]\","
+    } else {
+	append registration "\"path\":\"/receive![::uobj::id $dev]\","
+    }
     append registration "\"interval\":[expr $CTKI(sampling)/1000]"
     append registration "\}"
-
+    
     # Establish a subscription at the mote.
-    set rooturl "http://\[$DEV(ip)\]/cfg"
+    if { [::ip::version $DEV(ip)] == 6 } {
+	set rooturl "http://\[$DEV(ip)\]:$DEV(port)/cfg"
+    } else {
+	set rooturl "http://$DEV(ip):$DEV(port)/cfg"
+    }
     set cmd [list ::http::geturl $rooturl \
 		 -myaddr $CTKI(myaddr) \
 		 -method POST \
@@ -413,11 +433,12 @@ proc ::dev:subscribe { dev } {
 }
 
 
-proc ::dev:__create { ip key token } {
+proc ::dev:__create { ip port key token } {
     global CTKI
 
-    set rooturl "http://\[${ip}\]/"
+    upvar \#0 $token htstate
     if { [::http::ncode $token] == 200 } {
+	$CTKI(log)::info "Analysing resources available from $htstate(url)"
 	set dev ""
 
 	set data [::http::data $token]
@@ -428,7 +449,7 @@ proc ::dev:__create { ip key token } {
 	    set node [dict get $data "node"]
 	    set node_type [dict get $node "node-type"]
 	}
-
+	
 	if { [dict exists $data "rsc"] } {
 	    set rsc [dict get $data "rsc"]
 	    if { [dict exists $rsc $key] } {
@@ -437,11 +458,12 @@ proc ::dev:__create { ip key token } {
 		set DEV(type) $node_type
 		set DEV(timestamp) ""
 		set DEV(ip) $ip
+		set DEV(port) $port
 		set DEV(key) $key
 		set DEV(value) [dict get [dict get $rsc $key] "value"]
 		set DEV(sampling) ""
 		$CTKI(log)::debug "Initialised connection to\
-                                   $DEV(type): $DEV(ip)/$DEV(key)\
+                                   $DEV(type): $DEV(ip):$DEV(port)/$DEV(key)\
                                    = $DEV(value)"
 	    }
 	} else {
@@ -453,7 +475,7 @@ proc ::dev:__create { ip key token } {
 	}
 
     } else {
-	$CTKI(log)::warn "Could not get $rooturl: error is\
+	$CTKI(log)::warn "Could not get $htstate(url): error is\
                               '[::http::error $token]' status is\
                               '[::http::status $token]', HTTP code was:\
                               [::http::ncode $token]"
@@ -470,14 +492,38 @@ proc ::dev:__progress { token total current } {
 }
 
 
+proc ::net:ip { spec } {
+    global CTKI
+
+    # Try understanding all combinations of hostname/ip and port
+    # number with a colon as a separator.
+    if { [string match {\[[0-9a-fA-F:]*\]:[0-9]*} $spec] } {
+	set colon [string last ":" $ip]
+	set port [string trim [string range $spec $colon end] ":"]
+	set ip [string trim [string range $spec 0 $colon] "\[\]:"]
+    } elseif { [::ip::version $spec] == 6 } {
+	set ip $ip
+	set port 80
+    } elseif { [string match {*:[0-9]*} $spec] } {
+	foreach {ip port} [split $spec ":"] break
+    } else {
+	set ip $spec
+	set port 80
+    }
+
+    return [list $ip $port]
+}
+
 proc ::dev:init { ip key } {
     global CTKI
+
+    foreach {ip port} [::net:ip $ip] break
 
     # Open a socket to the remote web server to guess our own IP
     # address.
     if { $CTKI(myaddr) eq "" } {
 	$CTKI(log)::info "Detecting our own IP address"
-	if { [catch {socket $ip 80} sock] } {
+	if { [catch {socket $ip $port} sock] } {
 	    $CTKI(log)::error "Could not open connection to $ip: $sock"
 	} else {
 	    foreach {myip hst prt} [fconfigure $sock -sockname] break
@@ -491,12 +537,16 @@ proc ::dev:init { ip key } {
     # sure that it has the specified key among its resources and to be
     # able to create an object encapsulating it.
     set dev ""
-    set rooturl "http://\[${ip}\]/"
+    if { [::ip::version $ip] == 6 } {
+	set rooturl "http://\[${ip}\]:${port}/"
+    } else {
+	set rooturl "http://${ip}:${port}/"
+    }
     $CTKI(log)::notice "Initialising connection to mote at $rooturl..."
     set gcmd [list ::http::geturl $rooturl \
 		  -progress ::dev:__progress \
 		  -blocksize 127 \
-		  -command [list ::dev:__create $ip $key]]
+		  -command [list ::dev:__create $ip $port $key]]
     if { $CTKI(timeout) > 0 } {
 	lappend gcmd -timeout $CTKI(timeout)
     }
@@ -557,6 +607,14 @@ proc ::net:init {} {
 			      -selfvalidate ""]
 		::minihttpd::handler $port /receive!* ::htreceive \
 		    "application/json"
+	    }
+	    "ws" -
+	    "websocket" {
+		set myaddr $CTKI(myaddr)
+		set port [::minihttpd::new "" $SERVER(port) \
+			      -externhost $myaddr \
+			      -selfvalidate ""]
+		::minihttpd::live $port /push!* ::wsreceive
 	    }
 	}
     }
