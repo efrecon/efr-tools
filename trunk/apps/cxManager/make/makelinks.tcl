@@ -35,7 +35,8 @@ proc makelink { root dir } {
 # that ln -s on msys copies data instead of creating a shortcut, which
 # is why we had to rely on an external tool.
 set mkdir [file dirname [info script]]
-if { $tcl_platform(platform) eq "windows" } {
+foreach {os cpu} [split [::platform::generic] "-"] break
+if { $os eq "windows" } {
     set ML(ln) [file join [file normalize $mkdir] "ln.exe"]
     set ML(lnopts) "-s"
 }
@@ -48,8 +49,13 @@ set lamp ../../lampcontroller/lib
 foreach src [list make progver event uuidhash] {
     makelink [file join $common tcldev/lib $src] $src
 }
-foreach src [list tkconclient send rest redis oauth iocpsock3.0 udp1.0.9] {
+foreach src [list tkconclient send rest redis oauth] {
     makelink [file join $common tcldev/contrib] $src
+}
+if { $os eq "windows" } {
+    foreach src [list iocpsock3.0 udp1.0.9] {
+	makelink [file join $common tcldev/contrib] $src
+    }
 }
 # Following to ensure we access tcllib under debugging sessions.
 foreach src [list tcllib1.11.1] {
