@@ -95,17 +95,29 @@ proc ::ssdp::__receive { cp } {
 	lappend headers [string tolower $header] [string trim $value]
     }
 
+    #puts "==> MTH:$method URL:$url VRS:$version HDRS:$headers"
+
     # React depending on the method.
     switch -exact -- $method {
 	"M-SEARCH" {
 	}
 	"HTTP/1.1" -
 	"NOTIFY" {
+	    array set MSG $headers
 	    # Only do something on the ssdp:alive which contains the
 	    # announcements. Maybe should we react more and have a
 	    # chance to discover services and devices earlier on
 	    # instead.
 	    if { [array names MSG usn] ne "" } {
+		# Make sure we have all details for announcements.
+		foreach k [list cache-control] {
+		    if { [array names MSG $k] eq "" } {
+			${log}::warn "No '$k' available in announce,\
+                                      cannot parse"
+			return 
+		    }
+		}
+
 		# Extract notification type (if any) and UUID from the
 		# composite identifier of the advertisement.
 		set nt ""

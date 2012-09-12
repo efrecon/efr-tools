@@ -113,8 +113,8 @@ proc ::UPnP::__receive { r token } {
 	# asynchronously call methods that do not send back any
 	# results.
 	if { [string trim $REMOTE(command) -] ne "" } {
-	    if { [catch {eval [linsert $REMOTE(command) end $REMOTE(action) \
-				   [array get REMOTE -*]]} err] } {
+	    set hdr [linsert $REMOTE(command) end $REMOTE(action)]
+	    if { [catch {eval [concat $hdr [array get REMOTE -*]]} err] } {
 		${log}::warn "Could not deliver callback for invocation of\
                               $ACTION(-name): $err"
 	    }
@@ -160,8 +160,11 @@ proc ::UPnP::call { a args } {
 
     # Either we have a command for reception, or we block until
     # reception of reply.
+    set first [lindex $args 0]
     set cmd ""
-    if { [string index [lindex $args 0] 0] ne "-" } {
+    if { [string index $first 0] ne "-" \
+	     || ( [string index $first 0] eq "-" \
+		      && [string trim $first -] eq "" ) } {
 	set cmd [lindex $args 0]
 	set args [lrange $args 1 end]
     }
@@ -183,6 +186,7 @@ proc ::UPnP::call { a args } {
     foreach {k v} $args {
 	foreach arg $ACTION(arguments) {
 	    upvar \#0 $arg ARGUMENT
+	    parray ARGUMENT
 	    if { $ARGUMENT(-direction) eq "in" \
 		     && $ARGUMENT(-name) eq [string trimleft $k -] } {
 		append call "<$ARGUMENT(-name)>${v}</$ARGUMENT(-name)>"
