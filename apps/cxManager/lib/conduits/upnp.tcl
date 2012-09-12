@@ -105,7 +105,7 @@ proc ::upnp::pair:__copy_once { p } {
 		    ${log}::warn "Could not find any action containing the\
                                   keyword $PAIR(-set) to set '$k'"
 		} else {
-		    ${log}::debug "Using action [$a get -name] to set $f"
+		    ${log}::debug "Using action [$action get -name] to set $k"
 		    $action call -- -$argname $REMOTE(-$k)
 		}
 	    }
@@ -584,7 +584,6 @@ proc ::upnp::rest:pair { prt sock url qry } {
     set PAIR(trigger) ""
     set PAIR(inited) 0
     set PAIR(scheduler) ""
-    set PAIR(-frequency) $frequency
     set PAIR(-set) $setter
     set PAIR(-get) $getter
     set PAIR(-retry) $retry
