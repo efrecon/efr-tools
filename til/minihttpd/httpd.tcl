@@ -1117,7 +1117,7 @@ proc ::minihttpd::__push { port sock } {
 	    # Convert the socket to a web socket if appropriate.
 	    __web_socket $port $sock
 	    
-	    if { $Client(handler) == "" } {
+	    if { $Client(handler) == "" && $Client(live) == "" } {
 		set mypath ""
 		set myurl [fullurl $port $Client(url) mypath]
 	    } else {
@@ -1125,12 +1125,13 @@ proc ::minihttpd::__push { port sock } {
 	    }
 
 	    if { $Server(root) != "" && $Client(handler) == "" \
-		     && [file isdirectory $mypath] } {
+		     && $Client(live) == "" && [file isdirectory $mypath] } {
 		dirlist::dirlist $port $sock $mypath \
 		    [__URLtoString $Client(url)]
 	    }
 
-	    if { $Server(root) == "" && $Client(handler) == "" } {
+	    if { $Server(root) == "" \
+		     && $Client(live) == "" && $Client(handler) == "" } {
 		set Client(response) [__handler_list $port]
 	    }
 
@@ -1149,10 +1150,24 @@ proc ::minihttpd::__push { port sock } {
 		}
 		puts $sock ""
 		flush $sock
-		
+
+		# Make the socket a websocket
 		::websocket::takeover $sock $Client(live) 1
-		__translog $port $sock WebSocket \
-		    Forwarded connection to handler $Client(live)
+
+		# Tell the websocket handler that we have a new
+		# incoming request. We mediate this through the
+		# "message" part, which in this case is composed of a
+		# list containing the URL and the query (itself as a
+		# list).
+		if { [catch {$Client(live) $sock request \
+				 [list $Client(url) $Client(query)]} \
+			  res] } {
+		    __push_error $port $sock 400 \
+			    "Error when executing WS connect handler: $res"
+		} else {
+		    __translog $port $sock WebSocket \
+			Forwarded connection to handler $Client(live)
+		}
 	    } elseif { $Client(response) != "" || $Client(handler) != "" } {
 		puts $sock "HTTP/1.0 200 Data follows"
 		puts $sock "Date: [__fmtdate [clock seconds]]"
