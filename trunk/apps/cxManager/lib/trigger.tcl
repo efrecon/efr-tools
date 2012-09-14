@@ -92,8 +92,12 @@ proc ::trigger:deliver { t } {
     set TRIGGER(scheduled) ""
     set TRIGGER(changes) {}
 
-    array set URL [::uri::split $url]
-    if { [string range $URL(scheme) 0 3] eq "http" } {
+    set colon [string first ":" $url]
+    set scheme [string tolower [string range $url 0 $colon]]
+
+    if { $scheme eq "http:" || $scheme eq "https:" } {
+	array set URL [::uri::split $url]
+
 	# Add Basic authentication headers.
 	set hdrs [list]
 	if { [array names URL user] ne "" \
@@ -133,7 +137,11 @@ proc ::trigger:deliver { t } {
 	    return 0
 	}
 	return 1
+    } elseif { $scheme eq "sock:" } {
+	set sock [string range $url [expr {$colon+1}] end]
+	::websocket::send $sock text [::json:object $TRIGGER(-object)]
     }
+
     return 0
 }
 
@@ -198,6 +206,30 @@ proc ::trigger:__check { t } {
 	return $result
     }
     return 0;  # Will catch errors on the expression
+}
+
+proc ::trigger:find { by key } {
+    global CM
+
+    switch -glob -- $by {
+	ur* -
+	r* {
+	    # url or receiver are synonyms
+	    return [::uobj::find [namespace current] trigger \
+			[list -receiver == $key]]
+	}
+	o* {
+	    return [::uobj::find [namespace current] trigger \
+			[list -object == $key]]
+	}
+	i* -
+	uu* {
+	    # id and uuid are synonyms
+	    return [::uobj::find [namespace current] trigger \
+			[list uuid == $key]]
+	}
+    }
+    return ""
 }
 
 
@@ -354,12 +386,21 @@ proc ::trigger:new { o qry } {
     }
     
     # How to send back value
-    set TRIGGER(-method) POST
-    if { [dict keys $qry method] ne {} } {
-	set meth [string toupper [dict get $qry method]]
-	if { [lsearch {GET POST PUT DELETE} $meth] >= 0 } {
-	    set TRIGGER(-method) $meth
+    set colon [string first ":" $TRIGGER(-receiver)]
+    if { $colon >= 0 } {
+	if { [string range $TRIGGER(-receiver) 0 $colon] eq "sock:" } {
+	    set TRIGGER(-method) WS
+	} else {
+	    set TRIGGER(-method) POST
+	    if { [dict keys $qry method] ne {} } {
+		set meth [string toupper [dict get $qry method]]
+		if { [lsearch {GET POST PUT DELETE} $meth] >= 0 } {
+		    set TRIGGER(-method) $meth
+		}
+	    }
 	}
+    } else {
+	return -code error "Malformed URL for trigger: $TRIGGER(-receiver)"
     }
     
     # Jitter

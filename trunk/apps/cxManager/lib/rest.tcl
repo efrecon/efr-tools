@@ -145,6 +145,27 @@ proc ::object:append { o f val } {
 }
 
 
+proc ::object:push { o c qry } {
+    global CM
+
+    set updates {};    # List of key values with updated fields.
+
+    upvar \#0 $o OBJ
+    set origins [$c inheritance on]
+    foreach s $origins {
+	foreach f [$s get fields] {
+	    set fname [$f get -name]
+	    if { [dict keys $qry $fname] ne "" } {
+		set val [dict get $qry $fname]
+		::object:update $o $f $val
+		lappend updates $fname $val
+	    }
+	}
+    }
+
+    return $updates
+}
+
 
 # ::rest:set -- Set value of field(s)
 #
@@ -212,22 +233,13 @@ proc ::rest:set { prt sock url qry } {
 	    }
 
 	    upvar \#0 $o OBJ
-	    set origins [$c inheritance on]
-	    foreach s $origins {
-		foreach f [$s get fields] {
-		    set fname [$f get -name]
-		    if { [dict keys $qry $fname] ne "" } {
-			set val [dict get $qry $fname]
-			::object:update $o $f $val
-			if { $when eq "" } {
-			    $CM(log)::debug "Updated field '$fname' in $o to\
-                                             $val"
-			} else {
-			    $CM(log)::debug "Field '$fname' in ${o}<-$SRC(id)\
-                                             scheduled to be $val at\
-                                             [::schema::to_rfc3339 $when]"
-			}
-		    }
+	    foreach { fname val } [::object:push $o $c $qry] {
+		if { $when eq "" } {
+		    $CM(log)::debug "Updated field '$fname' in $o to $val"
+		} else {
+		    $CM(log)::debug "Field '$fname' in ${o}<-$SRC(id)\
+                                     scheduled to be $val at\
+                                     [::schema::to_rfc3339 $when]"
 		}
 	    }
 
@@ -453,6 +465,65 @@ proc ::rest:listen { prt sock url qry } {
     }
 
     return $result
+}
+
+
+proc ::rest:stream { sock type msg } {
+    global CM
+
+    switch -glob -- $type {
+	"con*" -
+	"re*" {
+	    foreach {url qry} $msg break
+	    set result ""
+	    set uuid ""
+	    if { [dict keys $qry uuid] ne {} } {
+		set uuid [dict get $qry uuid]
+	    } else {
+		set uuid [lindex [split [string trimright $url "/"] "/"] end-1]
+	    }
+	    
+	    if { $uuid ne "" } {
+		$CM(log)::notice "Setting up a streaming callback for $uuid"
+		
+		# Misuse the receiver to be a "socket" URL, since we
+		# are not going to close things down.  Remembering the
+		# socket will help us finding back the trigger, thus
+		# the object, when receiving JSON formated data from
+		# the client.
+		dict set qry receiver "sock:$sock"
+		
+		foreach {o c} [::find:uuid $uuid object] break
+		if { $o ne "" } {
+		    set t [::trigger:new $o $qry]
+		}
+	    }
+	}
+	"te*" {
+	    # Receive JSON-formated data.  We look for the trigger
+	    # that is associated to the pseudo URL that have
+	    # previously built using the name of the socket and push
+	    # data from the JSON into the object.
+	    set t [::trigger:find receiver "sock:$sock"]
+	    if { $t ne "" } {
+		set dta [::json:to_dict $msg]
+		upvar \#0 $t TRIGGER
+		upvar \#0 $TRIGGER(-object) OBJ
+		set c [[$CM(cx) get schema] find [::uobj::type $OBJ(id)]]
+		foreach { fname val } [::object:push $OBJ(id) $c $dta] {
+		    $CM(log)::debug "Updated field '$fname' in\
+                                     $OBJ(id) to $val"
+		}
+	    }
+	}
+	"cl*" {
+	    # Cleanup trigger when websocket is closed.
+	    set t [::trigger:find receiver "sock:$sock"]
+	    if { $t ne "" } {
+		::trigger:destroy $t
+	    }
+	}
+    }
 }
 
 
