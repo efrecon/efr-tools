@@ -131,7 +131,7 @@ proc log:out {dt srv lvl str} {
     -options $options \
     -booleans [list] \
     -depends [list event uuidhash oauth rest redis udp] \
-    -load [list minihttpd schema model db ssdp UPnP cxapi] \
+    -load [list minihttpd websocket schema model db ssdp UPnP cxapi] \
     -packages [list struct::tree http uuid] \
     -sources [list json find trigger rest tree api pairing] \
     -parsed ::init:fix \
@@ -144,6 +144,7 @@ foreach f [glob -directory $dir -nocomplain -tails -- *.tcl] {
     lappend CM(conduits) [file rootname $f]
 }
 ::init::configuration;   # Re-configure again to configure the conduits!
+
 
 proc ::net:httpd { port { pki "" } } {
     global CM
@@ -179,6 +180,9 @@ proc ::net:httpd { port { pki "" } } {
 	"application/json"
     ::minihttpd::handler $srv /context/listen ::rest:listen "application/json"
     ::minihttpd::handler $srv /context/listen/ ::rest:listen "application/json"
+    ::minihttpd::live $srv /context/$uuid/stream ::rest:stream
+    ::minihttpd::live $srv /context/stream ::rest:stream
+    ::minihttpd::live $srv /context/stream/ ::rest:stream
     ::minihttpd::handler $srv /context/$uuid/destroy ::rest:destroy \
 	"application/json"
     ::minihttpd::handler $srv /context/destroy ::rest:destroy "application/json"

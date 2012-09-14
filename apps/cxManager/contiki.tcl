@@ -361,8 +361,10 @@ proc ::htreceive { prt sock url qry } {
 proc ::wsreceive { sock type msg } {
     global CTKI
 
-    set peer [fconfigure $sock -peer]
-    ::net:receiver [lreplace $peer 0 0] $msg
+    if { $type eq "text" } {
+	set peer [fconfigure $sock -peer]
+	::net:receiver [lreplace $peer 0 0] $msg
+    }
 }
 
 
