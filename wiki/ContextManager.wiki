@@ -636,6 +636,22 @@ to remove is to be taken from the path (the UUID above) or from the
 REST argument uuid, in which case the UUID should be omitted from the
 path.
 
+== Streaming ==
+
+The context manager supports streaming of data to and from objects. Streaming is built upon a combination of WebSocket and JSON and, as such, attempts to minimise the size of packets describing updates, thus being easier to implement to and from wireless sensor networks. WebSockets also have the advantage of easily passing through most firewalls, thus making it easy to push object updates to clients behind a firewall.
+
+=== /context/UUID/stream ===
+
+This operation provides a duplex channel to and from an object, thus being able to both mediate changes that have occurred within an object, but also to update its current value. As opposed to all other operations within the context manager, clients should access this entry point using the {{{ws:}}} or {{{wss:}}} schemes, i.e. the schemes that have been specified for WebSockets. The UUID of the object to modify is to be taken from the path (the UUID above) or from the REST argument uuid, in which case the UUID should be omitted from the path. This call takes the following arguments:
+  * field is a pattern matching one of more of the field of the object. This can be used to react only on parts of the objects. Not specifying the field will lead to a callback for any modification to the fields in the object.
+  * jitter is expressed in milliseconds and guarantees that callbacks are not made more often than the jitter period. It defaults to 100, so as to allow to easily set several fields in an object simultaneously without triggering several callbacks.
+  * expression is a mathematical expression that should evaluate to true for the trigger to fire and perform the callback. In that expression, strings surrounded by % signs will be substituted as in receiver. The complete syntax for that expression is out of the scope of this text but can be found here￼.
+  * always is a Boolean controlling when the callback should be considered for triggering. The default is to only trigger the callback whenever the value of the fields that the callback is bound to changes, setting always to true will make sure the callback triggers even if none of the values have changed.
+
+Down to the client, every time one of the matching fields is updated and as controlled by the expression, a full JSON representation of the object is sent as a {{{text}}} packet along the WebSocket. Clients can send similar JSON representations to update the content of the object.
+
+The operation creates a trigger which can be operated similarly to all other triggers. However, there is no way to return the UUID of the trigger at creation, usage of the {{{/trigger}}} call is recommended in that case.
+
 
 = Initial Pairing =
 
