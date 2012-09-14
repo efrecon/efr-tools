@@ -35,7 +35,7 @@ The {{{node}}} block describes the node, or mote. The {{{rsc}}} block describes 
 
 = Usage =
 
-The bridge has partial support for UDP and complete support for HTTP. The bridge takes a number of port and protocol specifications on the command line and will use the first one to subscribe itself as the receiver of sensor data within the sensor.
+The bridge has partial support for UDP and complete support for HTTP and WebSockets. The bridge takes a number of port and protocol specifications on the command line and will use the first one to subscribe itself as the receiver of sensor data within the sensor.
 
 The command-line option {{{report}}} controls both which sensors to listen to, what sort of data translation to perform, and what object of the context manager should receive the data. It contains a series of 4 values, which are understood as follows:
   # IPv6 address of the sensor to communicate with. You will have to ensure that you have full routing to the sensor. We recommend services such as [http://www.gogo6.com/ gogo6] to cross IPv4 boundaries whenever necessary.
@@ -63,6 +63,6 @@ Once registration has been successful, the mote will start sending data to the b
 
 = Tcl Caveats =
 
-The latest version of the UDP library, i.e. the one which is tagged as 1.0.9 from the teapot, does not seem to support IPv6 properly. So, while the code provided in the bridge is working on IPv4, it will not work properly on IPv6. This is the reason why the bridge also supports HTTP and actually favours HTTP. HTTP, being on top of TCP, does not play nicely with sensor networks: its payload is far bigger than the size of a packet in the air and it is statefull. We are currently looking into supporting web sockets within for the reception of data from sensors, as an alternative, but more standard way of transmitting data.
+The latest version of the UDP library, i.e. the one which is tagged as 1.0.9 from the teapot, does not seem to support IPv6 properly. So, while the code provided in the bridge is working on IPv4, it will not work properly on IPv6. This is the reason why the bridge also supports HTTP and actually favours HTTP. HTTP, being on top of TCP, does not play nicely with sensor networks: its payload is far bigger than the size of a packet in the air and it is statefull. To reduce payload, the bridge also supports WebSockets even though this is not supported by the Contiki implementation in the motes yet.
 
 Also it is essential to let the TCP listening routines to properly pick up an IPv6 interface. I had to switch off all self-validation of the internal httpd to be able to receive data on the TCP socket (HTTP formatted data!).
