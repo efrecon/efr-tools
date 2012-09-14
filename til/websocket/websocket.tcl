@@ -49,6 +49,8 @@ namespace eval ::websocket {
 	    ws_magic       "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 	    ws_version     13
 	    id_gene        0
+	    -keepalive     30
+	    -ping          ""
 	}
 	variable log [::logger::init [string trimleft [namespace current] ::]]
 	variable libdir [file dirname [file normalize [info script]]]
@@ -106,6 +108,9 @@ proc ::websocket::__disconnect { sock } {
     set varname [namespace current]::Connection_$sock
     upvar \#0 $varname Connection
 
+    if { $Connection(liveness) ne "" } {
+	after cancel $Connection(liveness)
+    }
     __push $sock disconnect "Disconnecting from remote end"
     catch {::close $sock}
     unset $varname
@@ -171,7 +176,7 @@ proc ::websocket::close { sock { code 1000 } { reason "" } } {
 	${log}::info "Closing web socket: $code ($reason)"
 	__push $sock close [list $code $reason]
     }
-
+    
     __disconnect $sock
 }
 
@@ -218,6 +223,93 @@ proc ::websocket::__push { sock type msg } {
 }
 
 
+# ::websocket::__ping -- Send a ping
+#
+#       Sends a ping at regular intervals to keep the connection alive
+#       and prevent equipment to close it due to inactivity.
+#
+# Arguments:
+#	sock	WebSocket that was taken over or created by this library
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       None.
+proc ::websocket::__ping { sock } {
+    variable WS
+    variable log
+
+    set varname [namespace current]::Connection_$sock
+    if { ! [info exists $varname] } {
+	${log}::warn "$sock is not a WebSocket connection anymore"
+	return -code error "$sock is not a WebSocket"
+    }
+    upvar \#0 $varname Connection
+
+    # Reschedule at once to get around any possible problem with ping
+    # sending.
+    __liveness $sock
+
+    # Now send a ping, which will trigger a pong from the
+    # (well-behaved) client.
+    ${log}::debug "Sending ping to keep connection alive"
+    send $sock ping $Connection(-ping)
+}
+
+
+# ::websocket::__liveness -- Keep connections alive
+#
+#       Keep connections alive (from the server side by construction),
+#       as suggested by the specification.  This procedure arranges to
+#       send pings after a given period of inactivity within the
+#       socket.  This ties to ensure that all equipment keep the
+#       connection open.
+#
+# Arguments:
+#	sock	Existing Web socket
+#
+# Results:
+#       Return the time to next ping, negative or zero if not relevant.
+#
+# Side Effects:
+#       None.
+proc ::websocket::__liveness { sock } {
+    variable WS
+    variable log
+
+    set varname [namespace current]::Connection_$sock
+    upvar \#0 $varname Connection
+
+    # Keep connection alive by issuing pings.
+    if { $Connection(liveness) ne "" } {
+	after cancel $Connection(liveness)
+    }
+    set when [expr {$Connection(-keepalive)*1000}]
+    if { $when > 0 } {
+	set Connection(liveness) [after $when [namespace current]::__ping $sock]
+    } else {
+	set Connection(liveness) ""
+    }
+    return $when
+}
+
+
+proc ::websocket::__type { opcode } {
+    variable WS
+    variable log
+
+    array set TYPES {1 text 2 binary 8 close 9 ping 10 pong}
+    if { [array names TYPES $opcode] } {
+	set type $TYPES($opcode)
+    } else {
+	set type <opcode-$opcode>
+    }
+
+    return $type
+}
+
+
 # ::websocket::send -- Send message or fragment to remote end.
 #
 #       Sends a fragment or a control message to the remote end of the
@@ -258,12 +350,15 @@ proc ::websocket::send { sock type {msg ""} {final 1}} {
     } else {
 	switch -glob -nocase -- $type {
 	    t* {
+		# text
 		set opcode 1
 	    }
 	    b* {
+		# binary
 		set opcode 2
 	    }
 	    p* {
+		# ping
 		set opcode 9
 	    }
 	}
@@ -287,9 +382,7 @@ proc ::websocket::send { sock type {msg ""} {final 1}} {
     }
 
     # Encode text
-    set type [string map \
-		  {1 text 2 binary 8 close 9 ping 10 pong} \
-		  $Connection(write:opcode)]
+    set type [__type $Connection(write:opcode)]
     if { $Connection(write:opcode) == 1 } {
 	set msg [encoding convertto utf-8 $msg]
     }
@@ -349,6 +442,9 @@ proc ::websocket::send { sock type {msg ""} {final 1}} {
 	close $sock 1001
 	return -1
     }
+
+    # Keep socket alive at all times.
+    __liveness $sock
 
     if { [string is true $final] } {
 	${log}::debug "Sent $mlen bytes long $type final fragment to $dst"
@@ -424,6 +520,9 @@ proc ::websocket::__receiver { sock } {
 	return -code error "$sock is not a WebSocket"
     }
     upvar \#0 $varname Connection
+
+    # Keep connection alive by issuing pings.
+    __liveness $sock
 
     # Get basic header.  Abort if reserved bits are set, unexpected
     # continuation frame, fragmented or oversized control frame, or
@@ -510,7 +609,8 @@ proc ::websocket::__receiver { sock } {
 	}
 	append Connection(read:msg) [__mask $mask $bytes]
     } else {
-	if { [catch {read $sock $len} bytes] || [string length $dta] != $len } {
+	if { [catch {read $sock $len} bytes] \
+		 || [string length $bytes] != $len } {
 	    ${log}::error "Cannot read fragment content from socket: $bytes"
 	    close $sock 1001
 	    return
@@ -523,9 +623,7 @@ proc ::websocket::__receiver { sock } {
     } else {
 	set dst "server"
     }
-    set type [string map \
-		  {1 text 2 binary 8 close 9 ping 10 pong} \
-		  $Connection(read:mode)]
+    set type [__type $Connection(read:mode)]
 
     # If the FIN bit is set, process the frame.
     if { $header & 0x8000 } {
@@ -554,8 +652,10 @@ proc ::websocket::__receiver { sock } {
 		return
 	    }
 	    9 {
-		# Ping: send pong back...
-		send $sock \xA $Connection(read:msg)
+		# Ping: send pong back and notify handler since this
+		# might contain some data.
+		send $sock 10 $Connection(read:msg)
+		__push $sock ping $Connection(read:msg)
 	    }
 	}
 
@@ -606,9 +706,23 @@ proc ::websocket::takeover { sock handler { server 0 } } {
     set Connection(read:msg) ""
     set Connection(write:opcode) -1
     set Connection(closed) 0
+    set Connection(liveness) ""
+    
+    # Arrange for keepalive to be zero, i.e. no pings, when we are
+    # within a client.  When in servers, take the default from the
+    # library.  In any case, this can be configured, which means that
+    # even clients can start sending pings when nothing has happened
+    # on the line if necessary.
+    if { [string is true $server] } {
+	set Connection(-keepalive) $WS(-keepalive)
+    } else {
+	set Connection(-keepalive) 0
+    }
+    set Connection(-ping) $WS(-ping)
 
     fconfigure $sock -translation binary -blocking on
     fileevent $sock readable [list [namespace current]::__receiver $sock]
+    __liveness $sock
     
     ${log}::debug "$sock has been registered as a\
                    [expr $server?\"server\":\"client\"] WebSocket"
@@ -871,6 +985,42 @@ proc ::websocket::open { url handler args } {
     }
 
     return $token
+}
+
+
+proc ::websocket::configure { sock args } {
+    variable WS
+    variable log
+
+    set varname [namespace current]::Connection_$sock
+    if { ! [info exists $varname] } {
+	${log}::warn "$sock is not a WebSocket connection anymore"
+	return -code error "$sock is not a WebSocket"
+    }
+    upvar \#0 $varname Connection
+
+    foreach { k v } $args {
+	set allowed 0
+	foreach opt {k* p*} {
+	    if { [string match -nocase $opt [string trimleft $k -]] } {
+		set allowed 1
+	    }
+	}
+	if { ! $allowed } {
+	    return -code error "$k is not a recognised option"
+	}
+	switch -nocase -glob -- [string trimleft $k -] {
+	    k* {
+		# Change keepalive
+		set Connection(-keepalive) $v
+		__liveness $sock;  # Change at once.
+	    }
+	    p* {
+		# Change ping, i.e. text used during the automated pings.
+		set Connection(-ping) $v
+	    }
+	}
+    }
 }
 
 
