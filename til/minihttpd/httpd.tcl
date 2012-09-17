@@ -20,7 +20,7 @@ package require sha1
 #package require tls; # We will request it on demand to make this a
 #soft constraint on the HTTP package.
 
-package provide minihttpd 1.2
+package provide minihttpd 1.3
 
 package require minihttpd::dirlist
 package require minihttpd::validate
@@ -41,7 +41,7 @@ namespace eval ::minihttpd {
 	    -default         "index.htm index.html"
 	    -dirlist         "*"
 	    -logfile         ""
-	    -bufsize         32768
+	    -bufsize         16384
 	    -sockblock       0
 	    -selfvalidate    hostname
 	    -externhost      ""
@@ -388,7 +388,8 @@ proc ::minihttpd::__accept { s_port sock ipaddr port} {
 	set varname "::minihttpd::Client_${s_port}_${sock}"
 	upvar \#0 $varname Client
 
-	fconfigure $sock -blocking $Server(-sockblock) \
+	fconfigure $sock \
+	    -blocking $Server(-sockblock) \
 	    -buffersize $Server(-bufsize) \
 	    -translation {auto crlf}
 	set Client(sock) $sock
@@ -1182,10 +1183,13 @@ proc ::minihttpd::__push { port sock } {
 		if { $Client(proto) == "HEAD" } {
 		    __finish $port $mypath "" $sock 0
 		} else {
-		    fconfigure $sock -translation auto \
+		    # Use the event loop to push data to the client.
+		    fconfigure $sock \
+			-translation binary \
 			-blocking $Server(-sockblock)
-		    puts -nonewline $sock $Client(response)
-		    __finish $port $mypath "" $sock 0
+		    set Client(outbytes) 0
+		    fileevent $sock writable \
+			[list ::minihttpd::__flush $port $sock]
 		}
 	    } else {
 		if {![catch {open $mypath} in]} {
@@ -1199,7 +1203,8 @@ proc ::minihttpd::__push { port sock } {
 		    if { $Client(proto) == "HEAD" } {
 			__finish $port $mypath "" $sock 0
 		    } else {
-			fconfigure $sock -translation binary \
+			fconfigure $sock \
+			    -translation binary \
 			    -blocking $Server(-sockblock)
 			fconfigure $in -translation binary -blocking 1
 			fcopy $in $sock \
@@ -1215,6 +1220,49 @@ proc ::minihttpd::__push { port sock } {
 	}
     } else {
 	${log}::warn "Not listening for HTTP connections on $port!"
+    }
+}
+
+
+# ::minihttpd::__flush -- Flush response to client
+#
+#       Flush response to client in chunks whenever it is ready to
+#       receive more data.  Finalise connection (end!) once done.
+#
+# Arguments:
+#	port	Port number of one of our HTTP servers.
+#	sock	Socket to client.
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       Copy client response in small chunks to the client.
+proc ::minihttpd::__flush { port sock } {
+    variable HTTPD
+    variable log
+
+    set idx [lsearch $HTTPD(servers) $port]
+    if { $idx >= 0 } {
+	set varname "::minihttpd::Server_${port}"
+	upvar \#0 $varname Server
+	
+	set idx [lsearch $Server(clients) $sock]
+	if { $idx >= 0 } {
+	    set varname "::minihttpd::Client_${port}_${sock}"
+	    upvar \#0 $varname Client
+
+	    set len [string length $Client(response)]
+	    if { $Client(outbytes) < $len } {
+		puts -nonewline $sock \
+		    [string range $Client(response) \
+			 $Client(outbytes) \
+			 [expr {$Client(outbytes)+$Server(-bufsize)-1}]]
+		incr Client(outbytes) $Server(-bufsize)
+	    } else {
+		__finish $port $Client(url) "" $sock $len
+	    }
+	}
     }
 }
 
@@ -1576,8 +1624,9 @@ proc ::minihttpd::__translog { port sock reason args } {
     variable HTTPD
 
     set logstr "\[[clock format [clock seconds] -format $HTTPD(dateformat)]\]"
-    set sockinfo [fconfigure $sock -peername]
-    append logstr " \[[lindex $sockinfo 1]:[lindex $sockinfo 2]\] "
+    if { [catch {fconfigure $sock -peername} sockinfo] == 0 } {
+	append logstr " \[[lindex $sockinfo 1]:[lindex $sockinfo 2]\]"
+    }
     append logstr " \[$reason\] "
     append logstr "[join $args { }]"
     __log $port $logstr
