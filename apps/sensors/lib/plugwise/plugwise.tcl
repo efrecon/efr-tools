@@ -11,7 +11,9 @@ namespace eval ::plugwise {
 	    -state       off
 	    -dev         /dev/ttyUSB0
 	    -react       10
+	    -errors      4
 	    dft_mac_pfx  000D6F0000
+	    debug        off
 	}
 	variable version 0.1
 	variable libdir [file dirname [file normalize [info script]]]
@@ -20,12 +22,20 @@ namespace eval ::plugwise {
     }
 }
 
-# TODO
-#
-# Implement object destruction!!
-
-
 # IMPLEMENTATION NOTES
+#
+# We rely on the (python-based) external binary that is able to
+# control plugwise plugs via their serial interface.  Whenever a plug
+# is created, an object is created and we initialise the plug from its
+# current state (mainly to get the state of the relay).  Once done, we
+# poll the state of the plug from time to time, both to gets its
+# current power consumption and to get its state.
+#
+# Note that plugwise_util takes its arguments in sequence and executes
+# them in sequence, which we use a number of times to minimise the
+# number of forks.  For example, at initialisation time, we both
+# synchronise the time of the plug to the computer time *and* get
+# information from it in a single call to plugwise_util.
 # 
 # Ideally, we wanted to use the -c option of the plugwise_util, but
 # since it does not flush, the pipe does not contain anything until
@@ -35,7 +45,35 @@ namespace eval ::plugwise {
 # delayed using a random number so as to minimise the load on the
 # resources.
 
-proc ::plugwise::__mac { mac } {
+
+# TODO
+#
+# Better error handling when talking to plugs. What happens if
+# plugwise_util fails?
+#
+# Handle plugs that are of wrong fw_version, since we know that
+# plugwise_util is able get information from them but perhaps not able
+# to control them?
+
+
+# ::plugwise::mac -- Return a plugwise MAC address
+#
+#       Sanitise a MAC address to return a unified MAC address of 8
+#       bytes, as used within the plugwise network.  The procedure
+#       accepts short 3 bytes addresses and automatically adds the
+#       prefix that seems to be prevalent to all installations.
+#
+# Arguments:
+#	mac	MAC address, separated or not by : or - (3 or 8 bytes hex)
+#
+# Results:
+#       Return a sanitised, uppercase, no separators MAC address coded
+#       on exactly 8 bytes, or an empty string when sanitisation
+#       failed.
+#
+# Side Effects:
+#       None.
+proc ::plugwise::mac { mac } {
     variable PWISE
     variable log
 
@@ -75,15 +113,17 @@ proc ::plugwise::switch { p { state "" } } {
     upvar \#0 $p PLUG
 
     if { $state ne "" } {
+	${log}::notice "Changing state of $PLUG(mac) to $state"
 	# Make a command that starts by changing the state and then
 	# reads the current state to check that we were successful.
 	set cmd "|\"$PWISE(-controller)\" -m $PLUG(mac) -d $PLUG(-dev)\
                   -s [string is true $state] -q relay_state"
-	set fd [open $cmd RDWR]
+	set fd [open $cmd]
 	fconfigure $fd -buffering line -blocking 1 -translation lf
 	set state [string trim [read $fd]]
 	close $fd
 	set PLUG(-state) $state
+	${log}::info "Plug $PLUG(mac) now in state: $state"
 	::event::generate $p Switch
     }
 
@@ -101,8 +141,9 @@ proc ::plugwise::get { p what } {
     upvar \#0 $p PLUG
 
     ::switch -glob -- $what {
-	mac {
-	    return $PLUG(mac)
+	mac -
+	state {
+	    return $PLUG($what)
 	}
 	hz -
 	hw_ver -
@@ -116,6 +157,61 @@ proc ::plugwise::get { p what } {
 
     return ""
 }
+
+
+proc ::plugwise::destroy { p } {
+    variable PWISE
+    variable log
+
+    if { ![::uobj::isa $p plug] } {
+	return -code error "$p unknown or wrong type!"
+    }
+    upvar \#0 $p PLUG
+
+    ::event::generate $p Delete
+
+    __pulse $p delete
+    ::uobj::delete $p
+}
+
+
+proc ::plugwise::__pulse { p { op "next" } } {
+    variable PWISE
+    variable log
+
+    if { ![::uobj::isa $p plug] } {
+	return -code error "$p unknown or wrong type!"
+    }
+    upvar \#0 $p PLUG
+
+    ::switch $op {
+	delete -
+	destroy -
+	clean {
+	    if { $PLUG(poller) ne "" } {
+		after cancel $PLUG(poller)
+	    }
+	    set PLUG(poller) ""
+	}
+	next {
+	    if { $PLUG(poller) ne "" } {
+		after cancel $PLUG(poller)
+	    }
+	    set when [expr {int($PLUG(-frequency)*1000)}]
+	    set PLUG(poller) [after $when [namespace current]::__check $p]
+	}
+	first -
+	init {
+	    if { $PLUG(poller) ne "" } {
+		after cancel $PLUG(poller)
+	    }
+	    set when [expr {int(rand()*$PLUG(-frequency)*1000)}]
+	    set PLUG(poller) [after $when [namespace current]::__check $p]
+	}
+    }
+    return $PLUG(poller)
+}
+
 
 proc ::plugwise::__check { p } {
     variable PWISE
@@ -134,9 +230,13 @@ proc ::plugwise::__check { p } {
 	set fd [open $cmd]
 	fconfigure $fd -buffering line -blocking 1 -translation lf
 
+	set errs 0
 	while { ! [eof $fd] } {
 	    set l [string trim [string tolower [gets $fd]]]
 	    if { $l ne "" } {
+		if { [string is true $PWISE(debug)] } {
+		    ${log}::debug "Status: $l"
+		}
 		if { [string match "power usage:*" $l] } {
 		    foreach {- use} [split $l ":"] break
 		    set use [string trim [string trim $use "w"]]
@@ -149,6 +249,9 @@ proc ::plugwise::__check { p } {
 			    ::event::generate $p Demand [list %d $diff %t $now]
 			}
 		    }
+		} elseif { [string match "error:*" $l] } {
+		    ${log}::error "Error when communicating with plugwise: $l"
+		    incr errs
 		} else {
 		    set old [string is true $PLUG(-state)]
 		    set PLUG(-state) [string is true $l]
@@ -162,8 +265,26 @@ proc ::plugwise::__check { p } {
 	close $fd
     }
 
-    set when [expr {int($PLUG(-frequency)*1000)}]
-    set PLUG(poller) [after $when [namespace current]::__check $p]
+    # Put the plug in error state if we've failed getting data from it
+    # for a number of times.
+    if { $errs == 0 } {
+	if { $PLUG(errors) > 0 } {
+	    ${log}::debug "Plug $PLUG(mac) is fine again"
+	}
+	set PLUG(errors) 0
+    } else {
+	incr PLUG(errors) $errs
+    }
+    if { $PLUG(errors) > $PLUG(-errors) } {
+	set PLUG(state) ERROR
+    }
+
+    if { $PLUG(state) eq "ERROR" } {
+	::event::generate $p Error
+	__pulse $p delete
+    } else {
+	__pulse $p next
+    }
 }
 
 
@@ -186,7 +307,7 @@ proc ::plugwise::jsdate { str } {
 }
 
 
-proc ::plugwise::__init { p } {
+proc ::plugwise::init { p } {
     variable PWISE
     variable log
 
@@ -204,8 +325,15 @@ proc ::plugwise::__init { p } {
     fconfigure $fd -buffering line -blocking 1 -translation lf
     while { ! [eof $fd] } {
 	set line [string trim [gets $fd]]
+	if { [string is true $PWISE(debug)] } {
+	    ${log}::debug "Initialisation: $line"
+	}
 	if { [string match -nocase info* $line] } {
 	} elseif { $line eq "" } {
+	} elseif { [string match -nocase "Error:*" $line] } {
+	    ${log}::error "Error when communicating with plugwise: $line"
+	    set PLUG(state) ERROR
+	    break
 	} elseif { [string match -nocase "*:*" $line] } {
 	    foreach {k v} [split $line ":"] break
 	    set k [string trim $k "{' \t\r\n"]
@@ -222,20 +350,22 @@ proc ::plugwise::__init { p } {
 		}
 		*state {
 		    set PLUG(-state) [string is true $v]
+		    ${log}::info "Plug $PLUG(mac) in state: $PLUG(-state)"
 		}
 	    }
 	}
     }
     close $fd
 
-    set PLUG(state) INITED
-    ::event::generate $p Inited
+    if { $PLUG(state) eq "ERROR" } {
+	::event::generate $p Error
+    } else {
+	set PLUG(state) INITED
+	set PLUG(errors) 0
+	::event::generate $p Inited
 
-    if { $PLUG(poller) ne "" } {
-	after cancel $PLUG(poller)
+	__pulse $p init
     }
-    set when [expr {int(rand()*$PLUG(-frequency)*1000)}]
-    set PLUG(poller) [after $when [namespace current]::__check $p]
 }
 
 
@@ -252,7 +382,7 @@ proc ::plugwise::config { p args } {
     set result [eval ::uobj::config PLUG "-*" $args]
     
     if { $PLUG(state) eq "NONE" } {
-	__init $p
+	init $p
     } else {
 	if { $OLD(-state) ne $PLUG(-state) && $PLUG(-state) ne "" } {
 	    switch $p $PLUG(-state)
@@ -261,12 +391,9 @@ proc ::plugwise::config { p args } {
 
     if { $OLD(-frequency) ne $PLUG(-frequency) } {
 	if { $PLUG(-frequency) > 0 } {
-	    # (re)state plugwise checker
-	    if { $PLUG(poller) ne "" } {
-		after cancel $PLUG(poller)
-	    }
-	    set when [expr {int(rand()*$PLUG(-frequency)*1000)}]
-	    set PLUG(poller) [after $when [namespace current]::__check $p]
+	    # (re)initialise the plug state poller whenever we change
+	    # the check frequency.
+	    __pulse $p init
 	} else {
 	    set PLUG(-frequency) $OLD(-frequency)
 	}
@@ -287,7 +414,7 @@ proc ::plugwise::new { mac args } {
     variable PWISE
     variable log
 
-    set mac [__mac $mac]
+    set mac [mac $mac]
     if { $mac eq "" } {
 	${log}::error "$mac is not a valid plugwise MAC address"
 	return -code error "$mac invalid MAC address"
@@ -301,6 +428,7 @@ proc ::plugwise::new { mac args } {
     set PLUG(state) NONE;  # State of the state machine
     set PLUG(poller) "";   # Identifier of polling command
     set PLUG(usage) {};    # Power usage over time
+    set PLUG(errors) 0;    # Number of errors when polling state
 
     # Extract from PWISE the options which are not globals and should
     # be inherited by each object, i.e. by each plug.
@@ -312,7 +440,8 @@ proc ::plugwise::new { mac args } {
     }
 
     ::uobj::inherit PWISE PLUG $options
-    ::uobj::objectify $p [list [list config configure] destroy switch get]
+    ::uobj::objectify $p [list [list config configure] [list destroy delete] \
+			      switch get init]
     eval config $p $args
 
     return $p
