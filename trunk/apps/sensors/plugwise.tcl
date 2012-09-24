@@ -1,15 +1,44 @@
-# Implement a plugwise bridge to the context manager.  This uses the
-# WebSocket interface, both to put it to a test, but also because the
-# connection needs to be bi-directional as plugs might get set from
-# the outside.
+##################
+## Program Name    --  Plugwise
+## Original Author --  Emmanuel Frecon - emmanuel@sics.se
+## Description:
+##
+##    This program implements a duplex connection between a (set of)
+##    plugwise plug(s) and the context engine.  Implemented on top of
+##    the new WebSocket streaming interface, it bridges completely the
+##    state of a physical plug and of an object within the context
+##    engine.  Consequently, changes to the state of the physical plug
+##    will automatically be reflected into the object in the context
+##    engine; and (relevant) changes to the context object will be
+##    propagated to the plug, turning on and off the relay that it
+##    carries for example.
+##
+##    The implementation uses a library that itself is a wrapper
+##    around the command line interface of the python library
+##    available at https://bitbucket.org/hadara/python-plugwise/.
+##    This require the command line program and library to be properly
+##    installed.  Unless you change permissions yourself, you will
+##    have to elevate your priviledges (sudo!) to run the Tcl script,
+##    since it forks plugwise_util, which itself requires access to
+##    the serial port (over USB).
+##
+##    When pushing data to the context manager, this process will
+##    automatically "implement" a number of pieces of data. Each of
+##    these can be specified as part of the links options.
+##    Implemented are: sampling, which is reflects the -frequency of
+##    the plug, though in milliseconds; power is the instant power
+##    in W as read from the plug, it will only be updated when it
+##    changes; energy will be the kW.h for the last entire hour (when
+##    implemented); status is the state of the relay in the plug.
+##
+##################
 
-# We must have at least 8.6 for IPv6 support!
 package require Tcl
 
 set options {
     { logfile.arg "%APPDATA%/me3gas/%progname%.log" "Where to save log for every run" }
     { context.arg "http://localhost:8802/" "Root URL to context manager" }
-    { links.arg "729C24 5d9a66e5-9738-598c-d0b0-e707eb0e2a36 status" "List of plugise MAC matches to UUID and fieldName" }
+    { links.arg "729C24 5360eae6-a1cd-5e98-014f-127f395074f4 {status:status power energy sampling}" "List of plugise MAC matches to UUID and plug:field names" }
 }
 
 array set PWISE {
@@ -166,24 +195,104 @@ proc ::json:from_dict {dctnary} {
 }
 
 
-# Receives info (status changes) directly from plug
-proc ::dev:__plug { p } {
+# ::dev:__send -- Send plug data to context manager
+#
+#       Sends plug data to the context manager. This procedure is
+#       aware of the data types that are implemented by this process,
+#       i.e. it automatically translates between the specified data
+#       types to the names of the fields in the context manager, as
+#       hinted at by the links options to the program.
+#
+# Arguments:
+#	p	Indentifier of the plug object
+#	arg1	descr
+#	arg2	descr
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       None.
+proc ::dev:__send { p what value } {
     global PWISE
 
     if { [::uobj::isa $p plug] } {
 	upvar \#0 $p PLUG
 
-	# Forwards (new) state of plug as a JSON format to the context
-	# manager along the websocket.
-	set msg "\{\"$PLUG(field)\":[string is true [$PLUG(plug) get -state]]\}"
-	if { $PLUG(sock) ne "" } {
-	    ::websocket::send $PLUG(sock) text $msg
+	foreach {plugField cxField} $PLUG(fields) {
+	    if { [string equal -nocase $plugField $what] } {
+		if { [string is integer $value] || [string is double $value] } {
+		    set msg "\{\"$cxField\":$value\}"
+		} else {
+		    set msg "\{\"$cxField\":\"$value\"\}"
+		}
+
+		if { $PLUG(sock) ne "" } {
+		    $PWISE(log)::notice "Sending $what = $cxField = $value to\
+                                         object $PLUG(uuid)"
+		    ::websocket::send $PLUG(sock) text $msg
+		}
+	    }
 	}
     }
 }
 
 
-# Receives info (status) from context manager
+# ::dev:__plug -- Receive and dispatch plug data
+#
+#       Receives events from the plugwise library and dispatch
+#       relevant data to the context manager to automatically reflect
+#       the state of the plug in the object that is bound to it.
+#
+# Arguments:
+#	p	Identifier of the local plug object
+#	e	Name of the event that led to this call
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       None.
+proc ::dev:__plug { p e } {
+    global PWISE
+
+    if { [::uobj::isa $p plug] } {
+	upvar \#0 $p PLUG
+
+	switch $e {
+	    Switch {
+		# Forwards (new) state of plug as a JSON format to the
+		# context manager along the websocket.
+		set state [string is true [$PLUG(plug) get -state]]
+		::dev:__send $p "status" $state
+	    }
+	    Change {
+		set power [lindex [$PLUG(plug) get usage] end]
+		::dev:__send $p "power" $power
+	    }
+	}
+    }
+}
+
+
+
+# ::dev:__context -- Receive info from context manager
+#
+#       Handles event from the WebSocket connection to the context
+#       manager, i.e. mainly incoming data whenever the content of the
+#       objects that the plugs are bound to are modified.
+#
+# Arguments:
+#	p	Identifier of the plug object.
+#	sock	Identifier of the (web) socket to the context manager.
+#	type	Type of the message received from the server
+#	msg	Message content.
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       None.
 proc ::dev:__context { p sock type msg } {
     global PWISE
 
@@ -196,28 +305,60 @@ proc ::dev:__context { p sock type msg } {
 		# object in context manager and switch the plug to
 		# reflect the (new) state of the object.
 		set dta [::json:to_dict $msg]
-		if { [dict exists $dta $PLUG(field)] } {
-		    set state [dict get $dta $PLUG(field)]
-		    if { [string is true $state] \
-			     != [string is true [$PLUG(plug) get -state]] } {
-			$PLUG(plug) switch [dict get $dta $PLUG(field)]
+		foreach {plugField cxField} $PLUG(fields) {
+		    if { $plugField eq "status" \
+			     && [dict exists $dta $cxField] } {
+			set state [dict get $dta $cxField]
+			if { [string is true $state] \
+				 != [string is true \
+					 [$PLUG(plug) get -state]] } {
+			    $PLUG(plug) switch $state
+			}
 		    }
 		}
 	    }
 	    "close" {
+		# We should probably delete the plug object and (the
+		# underlying) plug object from the plugwise library,
+		# unless we want to automatically reopen (retry?) the
+		# connection to the context manager in some way.
 	    }
 	    "connect" {
+		# Associate the socket identifier to our local plug
+		# object so we know where to send changes whenever the
+		# state of the plug changes (right now: relay, soon
+		# energy information).
 		set PLUG(sock) $sock
-		::dev:__plug $p;   # Send current state to cx manager
+		# Send current state and sampling rate to context manager.
+		::dev:__plug $p Switch
+		::dev:__send $p sampling \
+		    [expr [$PLUG(plug) get -frequency]*1000]
 	    }
 	}
     }
 }
 
 
+# ::net:wsroot -- Return main context manager root URL
+#
+#       Sanitise the URL to the context manager, i.e. replace the http
+#       scheme by ws, make it a web-socket URL (respecting the
+#       trailing 's') and appending context if necessary.
+#
+# Arguments:
+#       None.
+#
+# Results:
+#       Return main URL to context manager, to be used as the entry
+#       point to web sockets connections.
+#
+# Side Effects:
+#       None.
 proc ::net:wsroot {} {
     global PWISE
 
+    # Find the scheme and replace http by ws, to make this a viable
+    # websocket URL if necessary.
     set root ""
     set colon [string first ":" $PWISE(context)]
     set scheme [string range $PWISE(context) 0 [expr {$colon-1}]]
@@ -234,12 +375,14 @@ proc ::net:wsroot {} {
 	}
     }
 
+    # Make sure to append context after the root if not already
+    # present.
     if { $root ne "" } {
 	set root [string trimright $root "/"]
 	if { [string range $root end-6 end] ne "context" } {
 	    append root "/context"
 	}
-	return $root
+	return $root;  # We usually exit here, with a cool clean WS URL...
     }
     $PWISE(log)::error "Root of context should either be pointed at by HTTP\
                         or WS!"
@@ -247,7 +390,25 @@ proc ::net:wsroot {} {
 }
 
 
-proc ::dev:init { mac uuid field } {
+# ::dev:init -- Initialise bridge
+#
+#       Create a duplex bridge between a locally available PlugWise
+#       plug and an object in the context manager.  Establish the
+#       necessary event bindings to be able to propagate the state of
+#       the plugs into the object and vice versa.
+#
+# Arguments:
+#	mac	MAC address of the plug
+#	uuid	UUID of the object in context
+#	field	Name of field in object that contains the status
+#
+# Results:
+#       Return the identifier of the local object representation of
+#       the bridge, or an empty string on error.
+#
+# Side Effects:
+#       None.
+proc ::dev:init { mac uuid fields } {
     global PWISE
 
     set p [::uobj::find [namespace current] plug \
@@ -260,13 +421,23 @@ proc ::dev:init { mac uuid field } {
 	    set p [::uobj::new [namespace current] plug]
 	    upvar \#0 $p PLUG
 	    set PLUG(plug) $plug
-	    ::event::bind $PLUG(plug) Switch "::dev:__plug $p"
+	    ::event::bind $PLUG(plug) Switch "::dev:__plug $p %e"
+	    ::event::bind $PLUG(plug) Change "::dev:__plug $p %e"
 	    set PLUG(mac) [$plug get mac]
 	    set PLUG(sock) ""
+	    set PLUG(uuid) $uuid
 	    set PLUG(token) [::websocket::open \
 				 ${root}/${uuid}/stream \
 				 [list ::dev:__context $p]]
-	    set PLUG(field) $field
+	    set PLUG(fields) {}
+	    foreach spec $fields {
+		if { [string first ":" $spec] >= 0 } {
+		    foreach {plugField cxField} [split $spec ":"] break
+		    lappend PLUG(fields) $plugField $cxField
+		} else {
+		    lappend PLUG(fields) $spec $spec
+		}
+	    }
 	}
     }
 
@@ -274,18 +445,14 @@ proc ::dev:init { mac uuid field } {
 }
 
 
-proc ::net:init {} {
-    global PWISE
-
-    package require tls
-    ::http::register https 443 [list ::tls::socket]
-}
-
-::net:init
+# Initialise network, make sure we can support TLS encrypted
+# connections.
+package require tls
+::http::register https 443 [list ::tls::socket]
 
 # Create device listeners
-foreach {mac uuid field} $PWISE(links) {
-    ::dev:init $mac $uuid $field
+foreach {mac uuid fields} $PWISE(links) {
+    ::dev:init $mac $uuid $fields
 }
 
 vwait forever
