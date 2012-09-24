@@ -1,3 +1,11 @@
+##    The API is such as you create an object from a Plugwise MAC
+##    address, an object that you will use for all further operations,
+##    using a Tk-style programming interface.  This library uses the
+##    services of the event library to trigger a number of events on
+##    its objects.  These events are as follows:
+##
+##    
+
 package require uobj
 package require event
 
@@ -47,9 +55,6 @@ namespace eval ::plugwise {
 
 
 # TODO
-#
-# Better error handling when talking to plugs. What happens if
-# plugwise_util fails?
 #
 # Handle plugs that are of wrong fw_version, since we know that
 # plugwise_util is able get information from them but perhaps not able
@@ -103,6 +108,24 @@ proc ::plugwise::mac { mac } {
 }
 
 
+# ::plugwise::switch -- Switch a plugwise on and off
+#
+#       This procedure can be used to turn on or off the relay that is
+#       embedded in the plugwise, thus being able to change the state
+#       of the device(s) that are connected to that switch.
+#
+# Arguments:
+#	p	Identifier of the plugwise object
+#	state	New state (should be a boolean). Empty for query only.
+#
+# Results:
+#       Return the state of the plugwise.  If the state was changed,
+#       the state that is returned is the state as returned by the
+#       plug, i.e. the real physical state as reported by the
+#       plugwise.
+#
+# Side Effects:
+#       None.
 proc ::plugwise::switch { p { state "" } } {
     variable PWISE
     variable log
@@ -120,7 +143,7 @@ proc ::plugwise::switch { p { state "" } } {
                   -s [string is true $state] -q relay_state"
 	set fd [open $cmd]
 	fconfigure $fd -buffering line -blocking 1 -translation lf
-	set state [string trim [read $fd]]
+	set state [string trim [read $fd]]; # Read state of plug!
 	close $fd
 	set PLUG(-state) $state
 	${log}::info "Plug $PLUG(mac) now in state: $state"
@@ -131,6 +154,26 @@ proc ::plugwise::switch { p { state "" } } {
 }
 
 
+# ::plugwise::get -- Get (semi-)internal data from object
+#
+#       This procedure is able to return some extra information about
+#       the plugwise.  These are the following:
+#       mac     MAC address of the plug, complete
+#       state   State of the state machine, ERROR can be or interest
+#       hz      Number of Hertz where the plug is connected
+#       hw_ver  Hardware version of the plug
+#       fw_ver  Version of the firmware on the plug
+#       -       Anything starting with a dash is understood as an object option
+#
+# Arguments:
+#	p	Identifier of a plugwise object
+#	what	Information to retrieve (see above).
+#
+# Results:
+#       Returns the requested value or an error.
+#
+# Side Effects:
+#       None.
 proc ::plugwise::get { p what } {
     variable PWISE
     variable log
@@ -142,6 +185,7 @@ proc ::plugwise::get { p what } {
 
     ::switch -glob -- $what {
 	mac -
+	usage -
 	state {
 	    return $PLUG($what)
 	}
@@ -159,6 +203,19 @@ proc ::plugwise::get { p what } {
 }
 
 
+# ::plugwise::destroy -- Destroy connection to a plug
+#
+#       This procedure destroys the connection to a plug and removes
+#       the object from memory.
+#
+# Arguments:
+#	p	Identifier of the plug
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       None.
 proc ::plugwise::destroy { p } {
     variable PWISE
     variable log
@@ -168,6 +225,7 @@ proc ::plugwise::destroy { p } {
     }
     upvar \#0 $p PLUG
 
+    # Last minute event trigger, just in case...
     ::event::generate $p Delete
 
     __pulse $p delete
@@ -175,6 +233,25 @@ proc ::plugwise::destroy { p } {
 }
 
 
+# ::plugwise::__pulse -- Change polling state
+#
+#       Each object is associated to a pulse that will periodically
+#       poll for the state of the plug.  This procedure is used to
+#       control this pulse.  At initialisation, the pulse will
+#       randomly wait before starting to avoid having many instances
+#       of the plugwise_util program running at the same time.
+#
+# Arguments:
+#	p	Identifier of the plug
+#	op	Operation on the pulse: delete, next or init
+#
+# Results:
+#       Return the identifier of the after scheduler that was
+#       established for the next poll, incl. an empty string if it was
+#       removed.
+#
+# Side Effects:
+#       None.
 proc ::plugwise::__pulse { p { op "next" } } {
     variable PWISE
     variable log
@@ -213,6 +290,26 @@ proc ::plugwise::__pulse { p { op "next" } } {
 }
 
 
+# ::plugwise::__check -- Poll plug state
+#
+#       Poll for the state of the plug and report via events.
+#       Sometimes, error occur when accessing the current power state
+#       of the plug, this procedure accounts for these errors and put
+#       the plug in the ERROR state if too many have occured,
+#       generating an event at the same time. Most of the time, things
+#       will work and this procedure generates event every time the
+#       power usage has changed, but also whenever it has
+#       "drastically" changed, which is controlled by the -react
+#       option.
+#
+# Arguments:
+#	p	Identifier of the plug
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       None.
 proc ::plugwise::__check { p } {
     variable PWISE
     variable log
@@ -248,6 +345,9 @@ proc ::plugwise::__check { p } {
 			if { [expr {abs($diff)}] >= $PLUG(-react) } {
 			    ::event::generate $p Demand [list %d $diff %t $now]
 			}
+		    }
+		    if { $old eq "" || $old != $use } {
+			::event::generate $p Change [list %p "$old" %t $now]
 		    }
 		} elseif { [string match "error:*" $l] } {
 		    ${log}::error "Error when communicating with plugwise: $l"
