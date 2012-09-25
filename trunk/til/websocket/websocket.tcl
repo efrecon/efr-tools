@@ -200,24 +200,32 @@ proc ::websocket::close { sock { code 1000 } { reason "" } } {
 #	sock	WebSocket that was taken over or created by this library
 #	type	Type of the event
 #	msg	Data of the event.
+#       handler Use this command to push back instead of handler at WebSocket
 #
 # Results:
 #       None.
 #
 # Side Effects:
 #       None.
-proc ::websocket::__push { sock type msg } {
+proc ::websocket::__push { sock type msg { handler "" } } {
     variable WS
     variable log
 
-    set varname [namespace current]::Connection_$sock
-    if { ! [info exists $varname] } {
-	${log}::warn "$sock is not a WebSocket connection anymore"
-	return -code error "$sock is not a WebSocket"
+    # If we have not specified a handler, which is in most cases, pick
+    # up the handler from the array that contains all WS-relevant
+    # information.
+    if { $handler eq "" } {
+	set varname [namespace current]::Connection_$sock
+	if { ! [info exists $varname] } {
+	    ${log}::warn "$sock is not a WebSocket connection anymore"
+	    return -code error "$sock is not a WebSocket"
+	}
+	upvar \#0 $varname Connection
+	set handler $Connection(handler)
     }
-    upvar \#0 $varname Connection
 
-    if { [catch {$Connection(handler) $sock $type $msg} res] } {
+    # Ugly but working eval...
+    if { [catch {eval [concat $handler [list $sock $type $msg]]} res] } {
 	${log}::error "Error when executing WebSocket reception handler: $res"
     }
 }
@@ -433,7 +441,6 @@ proc ::websocket::send { sock type {msg ""} {final 1}} {
 	set msg [__mask $mask $msg]
     }
     
-
     # Send the (masked) frame
     if { [catch {
 	puts -nonewline $sock $header$msg
@@ -754,6 +761,31 @@ proc ::websocket::__connected { opener sock token } {
     upvar \#0 $opener OPEN
     upvar \#0 $token STATE
 
+    # Dig into the internals of the HTTP library for the socket if
+    # none present as part of the arguments (ugly...)
+    if { $sock eq "" } {
+	set sock $STATE(sock)
+    }
+
+	# Remove the socket from the socketmap inside the http
+	# library.  THIS IS UGLY, but the only way to make sure we
+	# really can take over the socket and make sure the library
+	# will open A NEW socket, even towards the same host, at a
+	# later time.
+	if { [info vars ::http::socketmap] ne "" } {
+	    foreach k [array names ::http::socketmap] {
+		if { $::http::socketmap($k) eq $sock } {
+		    ${log}::debug "Removed socket $sock from internal state\
+                                   of http library"
+		    unset ::http::socketmap($k)
+		}
+	    }
+	} else {
+	    ${log}::warn "Could not remove socket $sock from socket map, future\
+                          connections to same host and port are likely not to\
+                          work"
+	}
+
     if { [::http::ncode $token] == 101 } {
 	array set HDR $STATE(meta)
 
@@ -780,21 +812,18 @@ proc ::websocket::__connected { opener sock token } {
 
 	# Takeover the socket to create a connection and mediate about
 	# connection via the handler.
-	if { $sock eq "" } {
-	    set sock $STATE(sock)
-	}
 	takeover $sock $OPEN(handler)
 	__push $sock connect $proto;  # Tell the handler which
 				      # protocol was chosen.
     } else {
-	if { [catch {$OPEN(handler) "" error \
-			 "Protocol error during WebSocket connection with\
-                          $OPEN(url)"} res] } {
-	    ${log}::error "Error when executing WebSocket reception handler:\
-                           $res"
-	}
+	__push \
+	    "" \
+	    error \
+	    "Protocol error during WebSocket connection with $OPEN(url)" \
+	    $OPEN(handler)
     }
 
+    ::http::cleanup $token
     unset $opener;   # Always unset the temporary connection opening
 		     # array
 }
@@ -843,11 +872,7 @@ proc ::websocket::__timeout { opener } {
 	upvar \#0 $opener OPEN
 	
 	::http::reset $OPEN(token) "timeout"
-	if { [catch {$OPEN(handler) "" timeout \
-			 "Timeout when connecting to $OPEN(url)"} res] } {
-	    ${log}::error "Error when executing WebSocket reception handler:\
-                           $res"
-	}
+	__push "" timeout "Timeout when connecting to $OPEN(url)" $OPEN(handler)
 	::http::cleanup $OPEN(token)
 	unset $opener
     }
