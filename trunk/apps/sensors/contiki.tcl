@@ -469,7 +469,8 @@ proc ::dev:__create { ip port key token } {
                                    = $DEV(value)"
 	    }
 	} else {
-	    $CTKI(log)::notice "Device at $ip has no resource called $key"
+	    $CTKI(log)::notice "Device at $ip has no resource called $key:\
+                                available are [dict keys $rsc]"
 	}
 
 	if { $dev ne "" } {
@@ -504,7 +505,7 @@ proc ::net:ip { spec } {
 	set port [string trim [string range $spec $colon end] ":"]
 	set ip [string trim [string range $spec 0 $colon] "\[\]:"]
     } elseif { [::ip::version $spec] == 6 } {
-	set ip $ip
+	set ip $spec
 	set port 80
     } elseif { [string match {*:[0-9]*} $spec] } {
 	foreach {ip port} [split $spec ":"] break
