@@ -355,19 +355,24 @@ proc ::ssdp::config { o args } {
 	    }
 	    
 	    if { $OBJ(sock) eq "" && $SSDP(udp) ne "" } {
-		set OBJ(sock) [udp_open $OBJ(-port) reuse]
-		fconfigure $OBJ(sock) -translation crlf -buffering none
-		if { [catch {fconfigure $OBJ(sock) \
-				 -mcastadd $OBJ(-mcast) \
-				 -ttl $SSDP(-ttl) \
-				 -remote [list $OBJ(-mcast) $OBJ(-port)]} \
-			  err] } {
-		    # Discovered while running without network
-		    ${log}::error "Could not listen to multicast group\
-                                   $OBJ(-mcast): $err"
+		if { [catch {udp_open $OBJ(-port) reuse} sock] } {
+		    ${log}::error "Could not bind to SSDP port\
+                                   $OBJ(-port)!: $sock"
 		} else {
-		    fileevent $OBJ(sock) readable \
-			[list [namespace current]::__receive $o]
+		    set OBJ(sock) $sock
+		    fconfigure $OBJ(sock) -translation crlf -buffering none
+		    if { [catch {fconfigure $OBJ(sock) \
+				     -mcastadd $OBJ(-mcast) \
+				     -ttl $SSDP(-ttl) \
+				     -remote [list $OBJ(-mcast) $OBJ(-port)]} \
+			      err] } {
+			# Discovered while running without network
+			${log}::error "Could not listen to multicast group\
+                                   $OBJ(-mcast): $err"
+		    } else {
+			fileevent $OBJ(sock) readable \
+			    [list [namespace current]::__receive $o]
+		    }
 		}
 	    }
 
