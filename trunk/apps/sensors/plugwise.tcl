@@ -28,7 +28,7 @@
 ##    Implemented are: sampling, which is reflects the -frequency of
 ##    the plug, though in milliseconds; power is the instant power
 ##    in W as read from the plug, it will only be updated when it
-##    changes; energy will be the kW.h for the last entire hour (when
+##    changes; energy will be the W.h for the last entire hour (when
 ##    implemented); status is the state of the relay in the plug.
 ##
 ##################
@@ -38,12 +38,13 @@ package require Tcl
 set options {
     { logfile.arg "%APPDATA%/me3gas/%progname%.log" "Where to save log for every run" }
     { context.arg "http://localhost:8802/" "Root URL to context manager" }
-    { links.arg "729C24 5360eae6-a1cd-5e98-014f-127f395074f4 {status:status power energy sampling}" "List of plugise MAC matches to UUID and plug:field names" }
+    { links.arg "729C24 5360eae6-a1cd-5e98-014f-127f395074f4 {status:status power energy sampling} 729972 e4cb4459-6acf-528e-7b5b-f2f4197674de {status power energy sampling}" "List of plugise MAC matches to UUID and plug:field names" }
 }
 
 array set PWISE {
     logfd       ""
     debug       0
+    open_spread 3000
 }
 
 
@@ -213,25 +214,37 @@ proc ::json:from_dict {dctnary} {
 #
 # Side Effects:
 #       None.
-proc ::dev:__send { p what value } {
+proc ::dev:__send { p args } {
     global PWISE
 
     if { [::uobj::isa $p plug] } {
 	upvar \#0 $p PLUG
 
-	foreach {plugField cxField} $PLUG(fields) {
-	    if { [string equal -nocase $plugField $what] } {
-		if { [string is integer $value] || [string is double $value] } {
-		    set msg "\{\"$cxField\":$value\}"
-		} else {
-		    set msg "\{\"$cxField\":\"$value\"\}"
+	set msg "\{"
+	foreach {what value} $args {
+	    if { $what eq "__when" } {
+		append msg "\"__when\":${value},"
+	    } else {
+		foreach {plugField cxField} $PLUG(fields) {
+		    if { [string equal -nocase $plugField $what] } {
+			if { [string is integer $value] \
+				 || [string is double $value] } {
+			    append msg "\"$cxField\":${value},"
+			} else {
+			    append msg "\"$cxField\":\"$value\","
+			}
+		    }
 		}
+	    }
+	}
+	set msg [string trimleft $msg ","]
+	append msg "\}"
 
-		if { $PLUG(sock) ne "" } {
-		    $PWISE(log)::notice "Sending $what = $cxField = $value to\
-                                         object $PLUG(uuid)"
-		    ::websocket::send $PLUG(sock) text $msg
-		}
+	if { [string trim $msg "\{\}"] ne "" } {
+	    if { $PLUG(sock) ne "" } {
+		$PWISE(log)::notice "Sending [::json:to_dict $msg] to\
+                                     object $PLUG(uuid)"
+		::websocket::send $PLUG(sock) text $msg
 	    }
 	}
     }
@@ -253,7 +266,7 @@ proc ::dev:__send { p what value } {
 #
 # Side Effects:
 #       None.
-proc ::dev:__plug { p e } {
+proc ::dev:__plug { p e args } {
     global PWISE
 
     if { [::uobj::isa $p plug] } {
@@ -267,8 +280,11 @@ proc ::dev:__plug { p e } {
 		::dev:__send $p "status" $state
 	    }
 	    Change {
-		set power [lindex [$PLUG(plug) get usage] end]
-		::dev:__send $p "power" $power
+		::dev:__send $p "power" [lindex $args 0]
+	    }
+	    Energy {
+		::dev:__send $p "energy" [lindex $args 0] \
+		    "__when" [lindex $args 1]
 	    }
 	}
     }
@@ -329,6 +345,8 @@ proc ::dev:__context { p sock type msg } {
 		# state of the plug changes (right now: relay, soon
 		# energy information).
 		set PLUG(sock) $sock
+		$PWISE(log)::info "Plugwise $PLUG(mac) connected to context\
+                                   object $PLUG(uuid)"
 		# Send current state and sampling rate to context manager.
 		::dev:__plug $p Switch
 		::dev:__send $p sampling \
@@ -422,13 +440,11 @@ proc ::dev:init { mac uuid fields } {
 	    upvar \#0 $p PLUG
 	    set PLUG(plug) $plug
 	    ::event::bind $PLUG(plug) Switch "::dev:__plug $p %e"
-	    ::event::bind $PLUG(plug) Change "::dev:__plug $p %e"
+	    ::event::bind $PLUG(plug) Change "::dev:__plug $p %e %p"
+	    ::event::bind $PLUG(plug) Energy "::dev:__plug $p %e %y %t"
 	    set PLUG(mac) [$plug get mac]
 	    set PLUG(sock) ""
 	    set PLUG(uuid) $uuid
-	    set PLUG(token) [::websocket::open \
-				 ${root}/${uuid}/stream \
-				 [list ::dev:__context $p]]
 	    set PLUG(fields) {}
 	    foreach spec $fields {
 		if { [string first ":" $spec] >= 0 } {
@@ -438,6 +454,17 @@ proc ::dev:init { mac uuid fields } {
 		    lappend PLUG(fields) $spec $spec
 		}
 	    }
+
+	    # Open in a wee while, otherwise we might get raise
+	    # conditions inside the websocket library if opening
+	    # several times against the same host and port too
+	    # quickly.
+	    set when [expr int(rand()*$PWISE(open_spread))]
+	    $PWISE(log)::info "Opening WebSocket to ${root}/${uuid}/stream in\
+                               $when ms..."
+	    after $when [list ::websocket::open \
+			     ${root}/${uuid}/stream \
+			     [list ::dev:__context $p]]
 	}
     }
 
