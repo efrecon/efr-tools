@@ -291,9 +291,9 @@ proc ::dev:__push { d token } {
     global DVP
 
     upvar \#0 $token htstate
-    if { [::http::ncode $token] == 200 } {
-	upvar \#0 $d DEV
+    upvar \#0 $d DEV
 
+    if { [::http::ncode $token] == 200 } {
 	# Get data from sensor in JSON format.
 	set data [::http::data $token]
 	set DEV(value) [::json:to_dict $data]
