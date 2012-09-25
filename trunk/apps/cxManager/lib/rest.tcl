@@ -167,6 +167,78 @@ proc ::object:push { o c qry } {
 }
 
 
+proc ::object:set { o c qry } {
+    global CM
+
+    set result ""
+    set when ""
+    if { [dict exists $qry __when] } {
+	set when [::rest:when [dict get $qry __when]]
+	$CM(log)::debug "Setting values for object in future or past:\
+                         [::schema::to_rfc3339 $when]"
+    }
+
+    # Setting values in the future (or the past). We create a
+    # temporary instance of the object, and insert the values from the
+    # request into the temporary object (instead of the current
+    # copy). We hint the db package with the time of the insert
+    # (i.e. the timestamp contained in __when) so that it will be able
+    # to store in the database at the proper time.
+    if { $when ne "" } {
+	upvar \#0 $o SRC
+	set o [$c new]
+	upvar \#0 $o OBJ
+	# Copy the UUID since this is the same object, later/earlier
+	# in time.
+	set OBJ(uuid) $SRC(uuid);
+	# Hint at what time the set operations are occuring,
+	# this will be used by the db library.
+	::uobj::keyword $o when $when
+    }
+
+    upvar \#0 $o OBJ
+    foreach { fname val } [::object:push $o $c $qry] {
+	if { $when eq "" } {
+	    $CM(log)::debug "Updated field '$fname' in $o to $val"
+	} else {
+	    $CM(log)::debug "Field '$fname' in ${o}<-$SRC(id)\
+                             scheduled to be $val at\
+                             [::schema::to_rfc3339 $when]"
+	}
+    }
+
+    # Remove the keys that were not set by the operation when
+    # we specify a value in future or past, this will allow
+    # the db module to work smoothly, but is also conceptually
+    # proper since we have just described an update (an
+    # nothing else).
+    if { $when ne "" } {
+	foreach k [array names OBJ -*] {
+	    if { ![dict exists $qry [string trimleft $k "-"]] } {
+		unset ${o}($k)
+	    }
+	}
+    }
+
+    # Return a JSON expression describing either the full
+    # (current) state of the object, or the value of the
+    # fields that were set for future or past operations.
+    append result [::json:object $o $c]
+
+    # Remove copy of object source when we had specified a
+    # timestamp, since we don't need it anymore (it will
+    # hopefully be replayed into our dataspace later). We wait
+    # some time before the removal since the db module flushes
+    # to the database only after a while. This is a bit ugly
+    # though.
+    if { $when ne "" } {
+	after $CM(pertain) ::uobj::delete $o
+    }
+
+    return $result
+}
+
+
 # ::rest:set -- Set value of field(s)
 #
 #	Set the value(s) of a (number of) field(s) in an object, given
@@ -206,70 +278,7 @@ proc ::rest:set { prt sock url qry } {
     if { $uuid ne "" } {
 	foreach {o c} [::find:uuid $uuid object] break
 	if { $o ne "" } {
-	    set when ""
-	    if { [dict exists $qry __when] } {
-		set when [::rest:when [dict get $qry __when]]
-		$CM(log)::debug "Setting values for object in future or past:\
-                                 [::schema::to_rfc3339 $when]"
-	    }
-
-	    # Setting values in the future (or the past). We create a
-	    # temporary instance of the object, and insert the values
-	    # from the request into the temporary object (instead of
-	    # the current copy). We hint the db package with the time
-	    # of the insert (i.e. the timestamp contained in __when)
-	    # so that it will be able to store in the database at the
-	    # proper time.
-	    if { $when ne "" } {
-		upvar \#0 $o SRC
-		set o [$c new]
-		upvar \#0 $o OBJ
-		# Copy the UUID since this is the same object,
-		# later/earlier in time.
-		set OBJ(uuid) $SRC(uuid);
-		# Hint at what time the set operations are occuring,
-		# this will be used by the db library.
-		::uobj::keyword $o when $when
-	    }
-
-	    upvar \#0 $o OBJ
-	    foreach { fname val } [::object:push $o $c $qry] {
-		if { $when eq "" } {
-		    $CM(log)::debug "Updated field '$fname' in $o to $val"
-		} else {
-		    $CM(log)::debug "Field '$fname' in ${o}<-$SRC(id)\
-                                     scheduled to be $val at\
-                                     [::schema::to_rfc3339 $when]"
-		}
-	    }
-
-	    # Remove the keys that were not set by the operation when
-	    # we specify a value in future or past, this will allow
-	    # the db module to work smoothly, but is also conceptually
-	    # proper since we have just described an update (an
-	    # nothing else).
-	    if { $when ne "" } {
-		foreach k [array names OBJ -*] {
-		    if { ![dict exists $qry [string trimleft $k "-"]] } {
-			unset ${o}($k)
-		    }
-		}
-	    }
-
-	    # Return a JSON expression describing either the full
-	    # (current) state of the object, or the value of the
-	    # fields that were set for future or past operations.
-	    append result [::json:object $o $c]
-
-	    # Remove copy of object source when we had specified a
-	    # timestamp, since we don't need it anymore (it will
-	    # hopefully be replayed into our dataspace later). We wait
-	    # some time before the removal since the db module flushes
-	    # to the database only after a while. This is a bit ugly
-	    # though.
-	    if { $when ne "" } {
-		after $CM(pertain) ::uobj::delete $o
-	    }
+	    set result [::object:set $o $c $qry]
 	}
     }
 
@@ -510,10 +519,7 @@ proc ::rest:stream { sock type msg } {
 		upvar \#0 $t TRIGGER
 		upvar \#0 $TRIGGER(-object) OBJ
 		set c [[$CM(cx) get schema] find [::uobj::type $OBJ(id)]]
-		foreach { fname val } [::object:push $OBJ(id) $c $dta] {
-		    $CM(log)::debug "Updated field '$fname' in\
-                                     $OBJ(id) to $val"
-		}
+		::object:set $OBJ(id) $c $dta
 	    }
 	}
 	"cl*" {
