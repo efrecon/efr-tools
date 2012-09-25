@@ -1,10 +1,53 @@
+##################
+## Module Name     --  plugwise.tcl
+## Original Author --  Emmanuel Frecon - emmanuel@sics.se
+## Description:
+##
+##    This library provides a high-level access to a (set of) plugwise
+##    plugs.  Plugwise are ZigBee based relays that can be remotely
+##    switch on and off, but also measure energy consumption.  The
+##    library creates objects representing each plug that you want to
+##    watch and will automatically provide a number of services:
+##    # Switching on and off the plug
+##    # Regular polling of current power and reporting on change.
+##    # Reporting when "consequent" power change occur, i.e. new device
+##      being plugged in or out of the plug.
+##    # Reporting of energy log over time and reporting.
+##
+##    The implementation uses a library that itself is a wrapper
+##    around the command line interface of the python library
+##    available at https://bitbucket.org/hadara/python-plugwise/.
+##    This require the command line program and library to be properly
+##    installed.  Unless you change permissions yourself, you will
+##    have to elevate your priviledges (sudo!) to run the Tcl script,
+##    since it forks plugwise_util, which itself requires access to
+##    the serial port (over USB).
+##
 ##    The API is such as you create an object from a Plugwise MAC
 ##    address, an object that you will use for all further operations,
 ##    using a Tk-style programming interface.  This library uses the
 ##    services of the event library to trigger a number of events on
 ##    its objects.  These events are as follows:
+##    # Inited is triggered when the plug is ready for use by the lib.
+##    # Configure is triggered whenever the plug object is changed
+##    # Switch is triggered whenever the relay changes state, incl.
+##      from an external trigger.
+##    # Error is triggered when too many unrecoverable errors have
+##      been discovered for the plug.
+##    # Demand is triggered whenever the absolute demand on the plug
+##      (power difference) is greater than -react.  The event also
+##      carries the current power %p, the difference %d and the time
+##      %t.
+##    # Change is triggered whenever the power changes. The event also
+##      carries the current power %p, the previous value %d (old) and
+##      the time %t.
+##    # Energy is triggered for each (new) energy consumption log, i.e
+##      every hour. The event also carries the energy in Wh %y and the
+##      time %t.
+##    # Delete is triggered on deletion of the plug object.
 ##
-##    
+##################
+
 
 package require uobj
 package require event
@@ -20,6 +63,7 @@ namespace eval ::plugwise {
 	    -dev         /dev/ttyUSB0
 	    -react       10
 	    -errors      4
+	    -log         60
 	    dft_mac_pfx  000D6F0000
 	    debug        off
 	}
@@ -185,9 +229,12 @@ proc ::plugwise::get { p what } {
 
     ::switch -glob -- $what {
 	mac -
-	usage -
 	state {
 	    return $PLUG($what)
+	}
+	usage -
+	power {
+	    return $PLUG(power)
 	}
 	hz -
 	hw_ver -
@@ -228,21 +275,24 @@ proc ::plugwise::destroy { p } {
     # Last minute event trigger, just in case...
     ::event::generate $p Delete
 
-    __pulse $p delete
+    __pulse $p power delete
     ::uobj::delete $p
 }
 
 
 # ::plugwise::__pulse -- Change polling state
 #
-#       Each object is associated to a pulse that will periodically
-#       poll for the state of the plug.  This procedure is used to
-#       control this pulse.  At initialisation, the pulse will
-#       randomly wait before starting to avoid having many instances
-#       of the plugwise_util program running at the same time.
+#       Each object is associated to two pulses (a frequent one for
+#       the state of the relay, a less frequent one for the energy log)
+#       that will periodically poll for the state of the plug.  This
+#       procedure is used to control this pulse.  At initialisation,
+#       the pulse will randomly wait before starting to avoid having
+#       many instances of the plugwise_util program running at the
+#       same time.
 #
 # Arguments:
 #	p	Identifier of the plug
+#	poller	Which poller to change state for
 #	op	Operation on the pulse: delete, next or init
 #
 # Results:
@@ -252,7 +302,7 @@ proc ::plugwise::destroy { p } {
 #
 # Side Effects:
 #       None.
-proc ::plugwise::__pulse { p { op "next" } } {
+proc ::plugwise::__pulse { p { poller "power" } { op "next" } } {
     variable PWISE
     variable log
 
@@ -261,38 +311,106 @@ proc ::plugwise::__pulse { p { op "next" } } {
     }
     upvar \#0 $p PLUG
 
+    ::switch $poller {
+	"power" {
+	    set freq $PLUG(-frequency)
+	    set cmd [namespace current]::__check:power
+	}
+	"energy" {
+	    set freq $PLUG(-log)
+	    set cmd [namespace current]::__check:energy
+	}
+	default {
+	    return -code error "$poller is not a recognised poller!"
+	}
+    }
+
+
     ::switch $op {
 	delete -
 	destroy -
 	clean {
-	    if { $PLUG(poller) ne "" } {
-		after cancel $PLUG(poller)
+	    if { $PLUG(poll:$poller) ne "" } {
+		after cancel $PLUG(poll:$poller)
 	    }
-	    set PLUG(poller) ""
+	    set PLUG(poll:$poller) ""
 	}
 	next {
-	    if { $PLUG(poller) ne "" } {
-		after cancel $PLUG(poller)
+	    if { $PLUG(poll:$poller) ne "" } {
+		after cancel $PLUG(poll:$poller)
 	    }
-	    set when [expr {int($PLUG(-frequency)*1000)}]
-	    set PLUG(poller) [after $when [namespace current]::__check $p]
+	    set when [expr {int($freq*1000)}]
+	    set PLUG(poll:$poller) [after $when $cmd $p]
 	}
 	first -
 	init {
-	    if { $PLUG(poller) ne "" } {
-		after cancel $PLUG(poller)
+	    if { $PLUG(poll:$poller) ne "" } {
+		after cancel $PLUG(poll:$poller)
 	    }
-	    set when [expr {int(rand()*$PLUG(-frequency)*1000)}]
-	    set PLUG(poller) [after $when [namespace current]::__check $p]
+	    set when [expr {int(rand()*$freq*1000)}]
+	    set PLUG(poll:$poller) [after $when $cmd $p]
 	}
     }
-    return $PLUG(poller)
+    return $PLUG(poll:$poller)
 }
 
 
-# ::plugwise::__check -- Poll plug state
+# ::plugwise::__errors -- (Ac)count for errors
 #
-#       Poll for the state of the plug and report via events.
+#       Count the total number of errors in a row for a plug and put
+#       the whole plug in ERROR state (as in state machine) if there
+#       are too many errors.  When entering the ERROR state, an event
+#       is generated.
+#
+# Arguments:
+#	p	Identifier of the plugwise object.
+#	errs	Number of errors that were detected when talking to plug
+#
+# Results:
+#       -1 if the plug has entered the (final) ERROR state, the
+#       -current number of errors count for plug so far otherwise.
+#
+# Side Effects:
+#       None.
+proc ::plugwise::__error { p errs } {
+    variable PWISE
+    variable log
+
+    if { ![::uobj::isa $p plug] } {
+	return -code error "$p unknown or wrong type!"
+    }
+    upvar \#0 $p PLUG
+
+    # Reset error count if communication with plug was error-free,
+    # count errors otherwise.
+    if { $errs == 0 } {
+	if { $PLUG(errors) > 0 } {
+	    ${log}::debug "Plug $PLUG(mac) is fine again"
+	}
+	set PLUG(errors) 0
+    } else {
+	incr PLUG(errors) $errs
+    }
+
+    # Put the plug in error state if we've failed getting data from it
+    # for too many times.
+    if { $PLUG(errors) > $PLUG(-errors) } {
+	set PLUG(state) ERROR
+
+	::event::generate $p Error
+
+	__pulse $p power delete
+	__pulse $p energy delete
+	return -1;
+    }
+
+    return $PLUG(errors)
+}
+
+
+# ::plugwise::__check:power -- Poll plug relay state
+#
+#       Poll for relay the state of the plug and report via events.
 #       Sometimes, error occur when accessing the current power state
 #       of the plug, this procedure accounts for these errors and put
 #       the plug in the ERROR state if too many have occured,
@@ -310,7 +428,7 @@ proc ::plugwise::__pulse { p { op "next" } } {
 #
 # Side Effects:
 #       None.
-proc ::plugwise::__check { p } {
+proc ::plugwise::__check:power { p } {
     variable PWISE
     variable log
 
@@ -319,6 +437,7 @@ proc ::plugwise::__check { p } {
     }
     upvar \#0 $p PLUG
 
+    set errs 0
     if { $PLUG(state) eq "INITED" } {
 	${log}::debug "Checking state of plug $PLUG(mac)"
 	set cmd "|\"$PWISE(-controller)\" -m $PLUG(mac) -d $PLUG(-dev)\
@@ -327,7 +446,6 @@ proc ::plugwise::__check { p } {
 	set fd [open $cmd]
 	fconfigure $fd -buffering line -blocking 1 -translation lf
 
-	set errs 0
 	while { ! [eof $fd] } {
 	    set l [string trim [string tolower [gets $fd]]]
 	    if { $l ne "" } {
@@ -337,17 +455,19 @@ proc ::plugwise::__check { p } {
 		if { [string match "power usage:*" $l] } {
 		    foreach {- use} [split $l ":"] break
 		    set use [string trim [string trim $use "w"]]
-		    set old [lindex $PLUG(usage) end]
+		    set old [lindex $PLUG(power) end]
 		    set now [clock seconds]
-		    lappend PLUG(usage) $now $use
+		    lappend PLUG(power) $now $use; # XXX: Contain the length?
 		    if { $old ne "" } {
 			set diff [expr {$use-$old}]
 			if { [expr {abs($diff)}] >= $PLUG(-react) } {
-			    ::event::generate $p Demand [list %d $diff %t $now]
+			    ::event::generate $p Demand \
+				[list %p $use %d $diff %t $now]
 			}
 		    }
 		    if { $old eq "" || $old != $use } {
-			::event::generate $p Change [list %p "$old" %t $now]
+			::event::generate $p Change \
+			    [list %p $use %d "$old" %t $now]
 		    }
 		} elseif { [string match "error:*" $l] } {
 		    ${log}::error "Error when communicating with plugwise: $l"
@@ -365,29 +485,99 @@ proc ::plugwise::__check { p } {
 	close $fd
     }
 
-    # Put the plug in error state if we've failed getting data from it
-    # for a number of times.
-    if { $errs == 0 } {
-	if { $PLUG(errors) > 0 } {
-	    ${log}::debug "Plug $PLUG(mac) is fine again"
-	}
-	set PLUG(errors) 0
-    } else {
-	incr PLUG(errors) $errs
-    }
-    if { $PLUG(errors) > $PLUG(-errors) } {
-	set PLUG(state) ERROR
-    }
-
-    if { $PLUG(state) eq "ERROR" } {
-	::event::generate $p Error
-	__pulse $p delete
-    } else {
-	__pulse $p next
+    if { [__error $p $errs] >= 0 } {
+	__pulse $p power next
     }
 }
 
 
+# ::plugwise::__check:energy -- Poll plug energy consumption
+#
+#       Poll for energy consumption of the plug and report via events.
+#       Sometimes, error occur when accessing the current power state
+#       of the plug, this procedure accounts for these errors and put
+#       the plug in the ERROR state if too many have occured,
+#       generating an event at the same time. Most of the time, things
+#       will work and this procedure generates event every time the
+#       power usage has changed, but also whenever it has
+#       "drastically" changed, which is controlled by the -react
+#       option.
+#
+# Arguments:
+#	p	Identifier of the plug
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       None.
+proc ::plugwise::__check:energy { p } {
+    variable PWISE
+    variable log
+
+    if { ![::uobj::isa $p plug] } {
+	return -code error "$p unknown or wrong type!"
+    }
+    upvar \#0 $p PLUG
+
+    set errs 0
+    if { $PLUG(state) eq "INITED" } {
+	${log}::debug "Checking energy log of plug $PLUG(mac)"
+	set cmd "|\"$PWISE(-controller)\" -m $PLUG(mac) -d $PLUG(-dev)\
+                  -l current"
+    
+	set fd [open $cmd]
+	fconfigure $fd -buffering line -blocking 1 -translation lf
+
+	set empty 0
+	while { ! [eof $fd] } {
+	    set l [string trim [string tolower [gets $fd]]]
+	    if { $l ne "" } {
+		if { [string is true $PWISE(debug)] } {
+		    ${log}::debug "Status: $l"
+		}
+		if { [string match "power usage log:*" $l] } {
+		} elseif { [string match "error:*" $l] } {
+		    ${log}::error "Error when communicating with plugwise: $l"
+		    incr errs
+		} elseif { [string first "n/a" $l] >= 0 } {
+		    incr empty
+		} else {
+		    foreach {day hour energy unit} $l break
+		    set date [clock scan "$day $hour" -format "%Y-%m-%d %H"]
+		    if { [lsearch $PLUG(energy) $date] < 0 } {
+			lappend PLUG(energy) $date $energy
+			::event::generate $p Energy [list %t $date %y $energy]
+		    }
+		}
+	    }
+	}
+
+	close $fd
+    }
+
+    if { [__error $p $errs] >= 0 } {
+	__pulse $p energy next
+    }
+}
+
+
+# ::plugwise::jsdate -- Parse JavaScript date
+#
+#       The plugwise util is meant to be used from a JS wrapper, so
+#       the dates that its writes down use the datetime object from
+#       javascript.  This procedure does some simplistic parsing of
+#       such JS calls and returns the timestamp that was specified.
+#
+# Arguments:
+#	str	timestamp specification in JS
+#
+# Results:
+#       Timestamp in seconds since the period, or an empty string on
+#       errors.
+#
+# Side Effects:
+#       None.
 proc ::plugwise::jsdate { str } {
     variable PWISE
     variable log
@@ -407,6 +597,25 @@ proc ::plugwise::jsdate { str } {
 }
 
 
+# ::plugwise::init -- Initialisation of a plug
+#
+#       This procedure is typically (automatically) called one a
+#       plugwise object has been instantiated.  It will synchronise
+#       the date and time of the computer to the plugwise and will get
+#       some initial information from the plug, incl. the current
+#       state of the relay.  The procedure can also be called to try
+#       re-initialising connection to a plugwise once too many errors
+#       have been detected and the plug has been put in the ERROR
+#       state.
+#
+# Arguments:
+#	p       Identifier of the plugwise object.
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       None.
 proc ::plugwise::init { p } {
     variable PWISE
     variable log
@@ -464,7 +673,8 @@ proc ::plugwise::init { p } {
 	set PLUG(errors) 0
 	::event::generate $p Inited
 
-	__pulse $p init
+	__pulse $p power init
+	__pulse $p energy init
     }
 }
 
@@ -493,7 +703,7 @@ proc ::plugwise::config { p args } {
 	if { $PLUG(-frequency) > 0 } {
 	    # (re)initialise the plug state poller whenever we change
 	    # the check frequency.
-	    __pulse $p init
+	    __pulse $p power init
 	} else {
 	    set PLUG(-frequency) $OLD(-frequency)
 	}
@@ -524,11 +734,13 @@ proc ::plugwise::new { mac args } {
     upvar \#0 $p PLUG
 
     set PLUG(self) $p
-    set PLUG(mac) $mac;    # MAC address in ZigBee network
-    set PLUG(state) NONE;  # State of the state machine
-    set PLUG(poller) "";   # Identifier of polling command
-    set PLUG(usage) {};    # Power usage over time
-    set PLUG(errors) 0;    # Number of errors when polling state
+    set PLUG(mac) $mac;       # MAC address in ZigBee network
+    set PLUG(state) NONE;     # State of the state machine
+    set PLUG(poll:power) "";  # Identifier of polling command
+    set PLUG(power) {};       # Power usage over time
+    set PLUG(poll:energy) ""; # Identifier of energy consumption polling cmd
+    set PLUG(energy) {};      # Energy consumption in Wh over time
+    set PLUG(errors) 0;       # Number of errors when polling state
 
     # Extract from PWISE the options which are not globals and should
     # be inherited by each object, i.e. by each plug.
@@ -546,5 +758,6 @@ proc ::plugwise::new { mac args } {
 
     return $p
 }
+
 
 package provide plugwise $::plugwise::version
