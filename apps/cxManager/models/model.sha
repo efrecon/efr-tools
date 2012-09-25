@@ -73,7 +73,7 @@ Temperature:Float {
     unit      "celsius"
 }
 
-Effect:Float {
+Power:Float {
     intervals {[0,[}
     unit "watt"
 }
@@ -108,6 +108,11 @@ LuminousIntensity:Integer {
 Illuminance:Integer {
     intervals {[0,[}
     unit "lux"
+}
+
+# Expressed in kW.h
+Energy:Float {
+    intervals {[0,[}
 }
 
 Device {
@@ -145,27 +150,34 @@ Device {
 	SensorDevice {
 	    Electricity {
 		sampling Integer
-		value Effect
+		value Power
 		date Timestamp
 	    }
 	    Weather {
 		Thermometer {
 		    value Temperature
 		}
-		WeatherStation {
+		IndoorStation {
 		    temperature Temperature
 		    pressure Pressure
-		    humidity Humidity
-		    rain Float;  # in mm
-		    windDirection Angle
-		    windSpeed Float; # in m/s
+		    humidity Humidity; # in %
+		    WeatherStation {
+			rain Float;  # in mm
+			windDirection Angle
+			windSpeed Float; # in m/s
+		    }
 		}
 	    }
 	    Switch {
 		status Boolean
+		MeasuredSwitch {
+		    sampling Integer
+		    power Power
+		    energy Energy
+		}
 	    }
 	    LightSource {
-		effect Effect
+		power Power
 		luminousIntensity LuminousIntensity
 		radiationAngle Angle
 		OnOffLightSource {
@@ -186,7 +198,7 @@ Device {
 	    heatFluidIn Temperature
 	    heatFluidOut Temperature
 	    compressing Boolean
-	    resistance Effect
+	    resistance Power
 	    valve Boolean
 	    radiatorIn Temperature
 	    radiatorOut Temperature
@@ -221,5 +233,5 @@ Person {
 App {
     status AppStatus
     devices Device[]
-    totalEffect Effect
+    totalPower Power
 }
