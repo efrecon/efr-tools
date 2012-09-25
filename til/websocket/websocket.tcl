@@ -767,25 +767,6 @@ proc ::websocket::__connected { opener sock token } {
 	set sock $STATE(sock)
     }
 
-	# Remove the socket from the socketmap inside the http
-	# library.  THIS IS UGLY, but the only way to make sure we
-	# really can take over the socket and make sure the library
-	# will open A NEW socket, even towards the same host, at a
-	# later time.
-	if { [info vars ::http::socketmap] ne "" } {
-	    foreach k [array names ::http::socketmap] {
-		if { $::http::socketmap($k) eq $sock } {
-		    ${log}::debug "Removed socket $sock from internal state\
-                                   of http library"
-		    unset ::http::socketmap($k)
-		}
-	    }
-	} else {
-	    ${log}::warn "Could not remove socket $sock from socket map, future\
-                          connections to same host and port are likely not to\
-                          work"
-	}
-
     if { [::http::ncode $token] == 101 } {
 	array set HDR $STATE(meta)
 
@@ -808,6 +789,25 @@ proc ::websocket::__connected { opener sock token } {
 	set proto ""
 	if { [array names HDR Sec-WebSocket-Protocol] ne "" } {
 	    set proto $HDR(Sec-WebSocket-Protocol)
+	}
+
+	# Remove the socket from the socketmap inside the http
+	# library.  THIS IS UGLY, but the only way to make sure we
+	# really can take over the socket and make sure the library
+	# will open A NEW socket, even towards the same host, at a
+	# later time.
+	if { [info vars ::http::socketmap] ne "" } {
+	    foreach k [array names ::http::socketmap] {
+		if { $::http::socketmap($k) eq $sock } {
+		    ${log}::debug "Removed socket $sock from internal state\
+                                   of http library"
+		    unset ::http::socketmap($k)
+		}
+	    }
+	} else {
+	    ${log}::warn "Could not remove socket $sock from socket map, future\
+                          connections to same host and port are likely not to\
+                          work"
 	}
 
 	# Takeover the socket to create a connection and mediate about
