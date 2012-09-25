@@ -87,8 +87,8 @@ proc ::trigger:deliver { t } {
     set url [string map -nocase $map $TRIGGER(-receiver)]
     set body [string map -nocase $map $TRIGGER(-body)]
 
-    $CM(log)::debug "Mediating changes on $TRIGGER(-object) \
-                     [join [lsort -unique $TRIGGER(changes)] ,]"
+    $CM(log)::debug "Mediating changes on $TRIGGER(-object):\
+                     [join [lsort -unique $TRIGGER(changes)] , ]"
     set TRIGGER(scheduled) ""
     set TRIGGER(changes) {}
 
