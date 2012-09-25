@@ -152,6 +152,7 @@ Door bathDoor {
 Room hobby {
     name       "Hobby Room"
     connectors {staircase tuvaDoor parentsDoor gustavDoor simonDoor showerDoor}
+    devices    {flexibility}
 }
 
 Bedroom tuva {
@@ -301,6 +302,9 @@ Thermometer insideTemp {
 WeatherStation wStation {
     name    "weatherStation from pachube.com"
 }
+IndoorStation flexibility {
+    name    "Flexibility combined inner sensor"
+}
 SpokenThermometer feltTemp {
     name    "Temperature as we feel it"
 }
@@ -324,4 +328,10 @@ Electricity elMeter {
     sampling 1000
 }
 StringStore testLS {
+}
+MeasuredSwitch lamp {
+    name "Controlled Lamp"
+}
+MeasuredSwitch hairDryer {
+    name "Controlled Hair Dryer"
 }
