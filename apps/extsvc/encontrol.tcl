@@ -12,7 +12,7 @@ set options {
     { logfile.arg "%APPDATA%/me3gas/%progname%.log" "Where to save log for every run" }
     { port.integer "8899" "Port number of the web server that we implement" }
     { hostname.arg "" "Our real hostname as from the external world" }
-    { mappings.arg {http://localhost:8802/ 55851044-b290-56a5-3c88-d64ffbfa75e9 outside mote4.temp0 http://localhost:8802/ fc24cc87-dbfb-5243-5e9c-06ffd532a473 temperature mote7.temp0} "Available mappings" }
+    { mappings.arg {http://localhost:8802/ 55851044-b290-56a5-3c88-d64ffbfa75e9 %outside%*1.03 mote4.temp0 http://localhost:8802/ fc24cc87-dbfb-5243-5e9c-06ffd532a473 %temperature% mote7.temp0} "Available mappings" }
     { credentials.arg "" "Credentials when accessing enControl, separated by colon sign" }
 }
 
@@ -37,6 +37,7 @@ array set ENCTRL {
     triggers    ""
     current     ""
     soap        https://www.encontrol.es/API/DataService.svc
+    soaproot    encontrol.api.service/DataService
 }
 
 
@@ -262,7 +263,7 @@ proc ::net:init {} {
 
     # Login at enControl
     foreach {usr pwd} [split $ENCTRL(credentials) ":"] break
-    set ret [::soap:call encontrol.api.service/DataService/LoginCookie \
+    set ret [::soap:call $ENCTRL(soaproot)/LoginCookie \
 		 [list login $usr password $pwd]]
     set cookie [::soap:result $ret LoginCookieResult]
     if { $cookie eq "" } {
@@ -298,24 +299,24 @@ proc ::to_rfc3339 { { tstamp "" } { unit us } { variant "" } } {
 	} else {
 	    set unit us
 	}
-    } else {
-	switch $unit {
-	    us {
-	    }
-	    ms {
-		set us [expr {$tstamp * 1000}]
-	    }
-	    s {
-		set us [expr {$tstamp * 1000000}]
-	    }
+    }
+    switch $unit {
+	us {
+	    set us $tstamp
+	}
+	ms {
+	    set us [expr {$tstamp * 1000}]
+	}
+	s {
+	    set us [expr {$tstamp * 1000000}]
 	}
     }
 
     # Now convert to the RFC3339 format, making sure to support the
     # proper number of decimals in the output, i.e. following the
     # variant specification.
-    set secs [expr {$tstamp / 1000000}]
-    set micro [expr {$tstamp % 1000000}]
+    set secs [expr {$us / 1000000}]
+    set micro [expr {$us % 1000000}]
     set ts [clock format $secs -format "%Y-%m-%dT%T"]
     regexp {(...)(..)} [clock format $secs -format "%z"] matched tzh tzm
     switch $variant {
@@ -332,6 +333,18 @@ proc ::to_rfc3339 { { tstamp "" } { unit us } { variant "" } } {
 
     return -code error "Cannot convert incoming $tstamp to RFC3339, '$variant'\
                         is an unsupported type of fractions of seconds."
+}
+
+proc ::extract { str } {
+    set ids {}
+    set idx 0
+    while { [regexp -indices -start $idx {%\w+%} $str range] > 0 } {
+	foreach {start stop} $range break
+	lappend ids [string range $str [expr $start + 1] [expr $stop - 1]]
+	set idx [expr $stop + 1]
+    }
+
+    return $ids
 }
 
 
@@ -357,30 +370,43 @@ proc ::rest:callback { prt sock url qry } {
     global ENCTRL
 
     set clr ""
-    set uuid [dict get $qry __object]
-    set name [dict get $qry __name]
-    set value [dict get $qry $name]
+    set q_idx [dict get $qry __index]
 
     # Look for object and selection name within our known selection,
     # if found forward this to the procedure select which will select
     # the proper colour.
-    foreach { root uid nm sensor } $ENCTRL(mappings) {
-	if { $uid eq $uuid && $name eq $nm } {
-	    set ret [::soap:call \
-			 encontrol.api.service/DataService/UpdateSensorData \
-			 [list sensorName $sensor \
-			      value $value \
-			      date [::to_rfc3339 "" s s]] \
-			 [list Cookie $ENCTRL(cookie)]]
-	    set result [::soap:result $ret UpdateSensorDataResult]
-	    if { $result eq "01" } {
-		$ENCTRL(log)::debug "Updated sensor $sensor to $value at\
-                                     enControl"
-	    } else {
-		$ENCTRL(log)::warn "Error when updating sensor $sensor: $result"
+    set idx 0
+    foreach { root uid xpr sensor } $ENCTRL(mappings) {
+	if { $q_idx == $idx } {
+	    set mapping {}
+	    foreach name [lsort -unique [::extract $xpr]] {
+		if { [dict exists $qry $name] } {
+		    lappend mapping %$name% [dict get $qry $name]
+		}
 	    }
-	    break
+	    set value [string map $mapping $xpr]
+	    if { [catch {expr $value} result] == 0 } {
+		$ENCTRL(log)::debug "$xpr=$result -- sending to enControl"
+		set ret [::soap:call \
+			      $ENCTRL(soaproot)/UpdateSensorData \
+			     [list sensorName $sensor \
+				  value $result \
+				  date [::to_rfc3339 "" s]] \
+			     [list Cookie $ENCTRL(cookie)]]
+		set result [::soap:result $ret UpdateSensorDataResult]
+		if { $result eq "01" } {
+		    $ENCTRL(log)::debug "Updated sensor $sensor to $result at\
+                                         enControl"
+		} else {
+		    $ENCTRL(log)::warn "Error when updating sensor $sensor:\
+                                        $result"
+		}
+		break
+	    } else {
+		$ENCTRL(log)::error "Could not compute result or $xpr: $result"
+	    }
 	}
+	incr idx
     }
 
     return "\{\"colour\":\"$clr\"\}"
@@ -390,7 +416,8 @@ proc ::rest:callback { prt sock url qry } {
 proc ::bind {} {
     global ENCTRL
 
-    foreach {root uuid name sensor} $ENCTRL(mappings) {
+    set idx 0
+    foreach {root uuid xpr sensor} $ENCTRL(mappings) {
 	# Getting data for object to check that it exists
 	set cx [::cxapi::find $root]
 	if { $cx eq "" } {
@@ -402,10 +429,12 @@ proc ::bind {} {
 	    # Build a query string that will arrange for us to get all
 	    # the details about the field in that object
 	    set qry {}
-	    lappend qry $name %$name%
-	    # Append name and UUID to query so we can know who this is
-	    # for on return.
-	    lappend qry __object $uuid __name $name
+	    foreach name [lsort -unique [::extract $xpr]] {
+		lappend qry $name %$name%
+	    }
+	    # Append index to query so we can know who this is for on
+	    # return.
+	    lappend qry __index $idx
 	
 	    # Install a callback that will get back to us when
 	    # anything happen on the object.
@@ -420,12 +449,13 @@ proc ::bind {} {
 			  body $bdy]]
 	    set cb [json2dict $cbinfo]
 	    set tuid [dict get $cb uuid]
-	    lappend ENCTRL(triggers) $root $uuid $name $tuid
+	    lappend ENCTRL(triggers) $root $uuid $xpr $tuid
 	    $ENCTRL(log)::notice "Added trigger $tuid at remote context\
                                   manager at $root"
 	} else {
 	    $ENCTRL(log)::warn "$uuid does not exist within context manager!"
 	}
+	incr idx
     }
 }
 
