@@ -130,24 +130,24 @@ proc ::schema::to_rfc3339 { { tstamp "" } { unit us } { variant "" } } {
 	} else {
 	    set unit us
 	}
-    } else {
-	switch $unit {
-	    us {
-	    }
-	    ms {
-		set us [expr {$tstamp * 1000}]
-	    }
-	    s {
-		set us [expr {$tstamp * 1000000}]
-	    }
+    }
+    switch $unit {
+	us {
+	    set us $tstamp
+	}
+	ms {
+	    set us [expr {$tstamp * 1000}]
+	}
+	s {
+	    set us [expr {$tstamp * 1000000}]
 	}
     }
 
     # Now convert to the RFC3339 format, making sure to support the
     # proper number of decimals in the output, i.e. following the
     # variant specification.
-    set secs [expr {$tstamp / 1000000}]
-    set micro [expr {$tstamp % 1000000}]
+    set secs [expr {$us / 1000000}]
+    set micro [expr {$us % 1000000}]
     set ts [clock format $secs -format "%Y-%m-%dT%T"]
     regexp {(...)(..)} [clock format $secs -format "%z"] matched tzh tzm
     switch $variant {
@@ -491,14 +491,14 @@ proc ::schema::__verify { f name1 name2 op } {
 	if { $FIELD(-multi) } {
 	    foreach i $v($name2) {
 		if { ![check $type $i] } {
-		    return -code error "One of the values set to\
+		    return -code error "$i, one of the values set to\
                                         ${name1}($name2) is not a $type"
 		}
 	    }
 	} else {
 	    if { ![check $type $v($name2)] } {
-		return -code error "Value set to ${name1}($name2) is not a\
-                                    $type"
+		return -code error "$v($name2), value set to ${name1}($name2)\
+                                    is not a $type"
 	    }
 	}
 	if { $FIELD(definition) ne "" } {
@@ -507,7 +507,7 @@ proc ::schema::__verify { f name1 name2 op } {
 		foreach i $v($name2) {
 		    if { ! [__check_constraint $CONSTRAINT(schema) $i\
 				$FIELD(definition)] } {
-			return -code error "One of the values set to \
+			return -code error "$i, one of the values set to \
                                             ${name1}($name2) does not respect \
                                             constraint $CONSTRAINT(-name)"
 		    }
@@ -515,9 +515,9 @@ proc ::schema::__verify { f name1 name2 op } {
 	    } else {
 		if { ! [__check_constraint $CONSTRAINT(schema) $v($name2) \
 			    $FIELD(definition)] } {
-		    return -code error "Value set to \
-                                            ${name1}($name2) does not respect \
-                                            constraint $CONSTRAINT(-name)"
+		    return -code error "$v($name2), value set to \
+                                        ${name1}($name2) does not respect \
+                                        constraint $CONSTRAINT(-name)"
 		}
 	    }
 	}
@@ -526,7 +526,7 @@ proc ::schema::__verify { f name1 name2 op } {
 	if { $FIELD(-multi) } {
 	    foreach i $v($name2) {
 		if { ! [__check_field $CLASS(schema) $i $FIELD(definition)] } {
-		    return -code error "One of the values set to\
+		    return -code error "$i, one of the values set to\
                                         ${name1}($name2) does not inherit from\
                                         $FIELD(-type)"
 		}
@@ -534,7 +534,7 @@ proc ::schema::__verify { f name1 name2 op } {
 	} else {
 	    if { ! [__check_field $CLASS(schema) $v($name2) \
 			$FIELD(definition)] } {
-		return -code error "None of the super classes of\
+		return -code error "$v($name2), none of the super classes of\
                                     ${name1}($name2) is\
                                     a $FIELD(-type)"
 	    }
