@@ -175,7 +175,7 @@ proc ::object:set { o c qry } {
     if { [dict exists $qry __when] } {
 	set when [::rest:when [dict get $qry __when]]
 	$CM(log)::debug "Setting values for object in future or past:\
-                         [::schema::to_rfc3339 $when]"
+                         [::schema::to_rfc3339 $when s]"
     }
 
     # Setting values in the future (or the past). We create a
@@ -515,11 +515,14 @@ proc ::rest:stream { sock type msg } {
 	    # data from the JSON into the object.
 	    set t [::trigger:find receiver "sock:$sock"]
 	    if { $t ne "" } {
-		set dta [::json:to_dict $msg]
-		upvar \#0 $t TRIGGER
-		upvar \#0 $TRIGGER(-object) OBJ
-		set c [[$CM(cx) get schema] find [::uobj::type $OBJ(id)]]
-		::object:set $OBJ(id) $c $dta
+		if { [catch {::json:to_dict $msg} dta] } {
+		    $CM(log)::error "Error when parsing JSON $msg: $dta"
+		} else {
+		    upvar \#0 $t TRIGGER
+		    upvar \#0 $TRIGGER(-object) OBJ
+		    set c [[$CM(cx) get schema] find [::uobj::type $OBJ(id)]]
+		    ::object:set $OBJ(id) $c $dta
+		}
 	    }
 	}
 	"cl*" {
