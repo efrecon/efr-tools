@@ -50,7 +50,8 @@ proc ::cosm::__receive { p cmd token } {
 	    }
 	}
     } else {
-	${log}::warn "Could not get URL: error id\
+	upvar \#0 $token USTATE
+	${log}::warn "Could not get URL $USTATE(url): error id\
                       '[::http::error $token]' status is:\
                       '[::http::status $token]' code was:\
                       [::http::ncode $token]"
