@@ -137,7 +137,7 @@ foreach k [list log {context rcontext} comments timeout] {
 
 # Source unpackaged, but mostly well separated modules.
 foreach module [list api] {
-    source [file join $::init::libdir ${module}.tcl]
+    source [file join $::init::libdir .. .. cxManager lib ${module}.tcl]
 }
 
 
