@@ -272,6 +272,9 @@ proc ::report { dev } {
 			lappend qry [::to_rfc3339 $DEV(timestamp) us]
 		    }
 		    s* {
+			# Check value of sampling, since, at least the
+			# first time, we don't have a sampling
+			# frequence available all the time.
 			if { $DEV(sampling) ne "" } {
 			    lappend qry $field
 			    lappend qry $DEV(sampling)
@@ -309,9 +312,9 @@ proc ::net:receiver { peer pkt } {
     # Converts value to dictionary
     set data [::json:to_dict $pkt]
 
-    set dev [::uobj::find [namespace current] sensor \
+    set devs [::uobj::find [namespace current] sensor \
 		 [list ip == [lindex $peer 0]]]
-    if { $dev ne "" } {
+    foreach dev $devs {
 	upvar \#0 $dev DEV
 	$CTKI(log)::debug "Sender is $DEV(ip)/$DEV(key)"
 	if { [catch {dict get [dict get $data $DEV(key)] "value"} value] } {
@@ -467,6 +470,10 @@ proc ::dev:__create { ip port key token } {
 		$CTKI(log)::debug "Initialised connection to\
                                    $DEV(type): $DEV(ip):$DEV(port)/$DEV(key)\
                                    = $DEV(value)"
+
+		# Report current value at once, otherwise we will have
+		# to wait for a whole sampling period for reporting.
+		::report $dev; 
 	    }
 	} else {
 	    $CTKI(log)::notice "Device at $ip has no resource called $key:\
@@ -491,7 +498,7 @@ proc ::dev:__progress { token total current } {
     global CTKI
 
     upvar \#0 $token state
-    $CTKI(log)::debug "Read ${current}/${total} bytes for $state(url)"
+    $CTKI(log)::debug "Read ${current}/${total} bytes from $state(url)"
 }
 
 
