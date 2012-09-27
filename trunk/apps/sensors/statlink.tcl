@@ -8,17 +8,24 @@ set options {
     { context.arg "https://localhost:8800/" "Root URL of context manager" }
     { targets.arg "pump 55851044-b290-56a5-3c88-d64ffbfa75e9 temp 003be15d-e3d5-5939-18a6-c492d1cf631e" "Target objects in context manager" }
     { matcher.arg "%1% pump:radiatorIn %2% temp:value %2% pump:outside %3% pump:hotWater %6% pump:compressor %7% pump:heatFluidOut %8% pump:heatFluidIn %9% pump:coldFluidIn %10% pump:coldFluidOut int(%13%)!=0 pump:compressing int(%14%*3000+%15%*6000) pump:resistance" "Matcher for sensor id to field name" }
+    { timeout.integer "30000" "Timeout when waiting for sensor value" }
 }
 
 array set RPT {
     logfd       ""
     debug       0
     apiroot     "http://api.cosm.com/v2"
-    timeout     5000
     conversions {boolean float integer}
     cx          ""
 }
 
+## TODO
+#
+# Optimise so we don't get the value of the sensors several times (one
+# for the context and one for the direct cosm posting).
+#
+# Remove pachube security key from default arguments, make this a
+# "statlink.arg" file instead, not on SVN.
 
 source [file join [file dirname $argv0] lib init.tcl]
 if { [string is true $RPT(debug)] } {

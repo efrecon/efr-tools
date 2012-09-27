@@ -39,6 +39,7 @@ set options {
     { logfile.arg "%APPDATA%/me3gas/%progname%.log" "Where to save log for every run" }
     { context.arg "http://localhost:8802/" "Root URL to context manager" }
     { links.arg "729C24 5360eae6-a1cd-5e98-014f-127f395074f4 {status:status power energy sampling} 729972 e4cb4459-6acf-528e-7b5b-f2f4197674de {status power energy sampling}" "List of plugise MAC matches to UUID and plug:field names" }
+    { serial.arg "/dev/ttyUSB0" "Serial device to use for comm. to plugwise" }
 }
 
 array set PWISE {
@@ -237,7 +238,7 @@ proc ::dev:__send { p args } {
 		}
 	    }
 	}
-	set msg [string trimleft $msg ","]
+	set msg [string trimright $msg ","]
 	append msg "\}"
 
 	if { [string trim $msg "\{\}"] ne "" } {
@@ -432,7 +433,7 @@ proc ::dev:init { mac uuid fields } {
     set p [::uobj::find [namespace current] plug \
 	       [list mac == [::plugwise::mac $mac]]]
     if { $p eq "" } {
-	set plug [::plugwise::new $mac]
+	set plug [::plugwise::new $mac -dev $PWISE(serial)]
 	set root [::net:wsroot]
 
 	if { $plug ne "" && $root ne "" && [$plug get state] ne "ERROR" } {
