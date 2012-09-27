@@ -1,3 +1,11 @@
+if { [info vars ::__json_pkg] eq "" } {
+    set ::__json_pkg ""
+}
+if { [catch {package require json} ver] == 0 } {
+    set ::__json_pkg $ver
+} else {
+}
+
 # ::json:to_dict -- Convert JSON expression to a Tcl dictionary
 #
 #       This procedure converts a JSON expression to a Tcl
@@ -13,6 +21,7 @@
 # Side Effects:
 #       None.
 proc ::json:to_dict {json} {
+    if { $::__json_pkg eq "" } {
     string range [
 	string trim [
 	    regsub -- {^(\uFEFF)} [
@@ -20,6 +29,9 @@ proc ::json:to_dict {json} {
 		] {}
 	    ]
 	] 1 end-1
+    } else {
+	return [::json::json2dict $json]
+    }
 }
 
 
