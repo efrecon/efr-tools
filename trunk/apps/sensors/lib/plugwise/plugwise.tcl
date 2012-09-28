@@ -58,10 +58,10 @@ namespace eval ::plugwise {
 	array set PWISE {
 	    globals      "-controller"
 	    -controller  "plugwise_util"
-	    -frequency   5
+	    -frequency   15
 	    -state       off
 	    -dev         /dev/ttyUSB0
-	    -react       10
+	    -react       5
 	    -errors      4
 	    -log         60
 	    dft_mac_pfx  000D6F0000
@@ -232,9 +232,11 @@ proc ::plugwise::get { p what } {
 	state {
 	    return $PLUG($what)
 	}
-	usage -
+	usage {
+	    return $PLUG(usage)
+	}
 	power {
-	    return $PLUG(power)
+	    return [lindex $PLUG(usage) end]
 	}
 	hz -
 	hw_ver -
@@ -275,7 +277,11 @@ proc ::plugwise::destroy { p } {
     # Last minute event trigger, just in case...
     ::event::generate $p Delete
 
+    # Get rid of all bindings, we are dying.
+    ::event::clean $p
+
     __pulse $p power delete
+    __pulse $p energy delete
     ::uobj::delete $p
 }
 
@@ -455,10 +461,17 @@ proc ::plugwise::__check:power { p } {
 		if { [string match "power usage:*" $l] } {
 		    foreach {- use} [split $l ":"] break
 		    set use [string trim [string trim $use "w"]]
-		    set old [lindex $PLUG(power) end]
+		    set old [lindex $PLUG(usage) end]
 		    set now [clock seconds]
-		    lappend PLUG(power) $now $use; # XXX: Contain the length?
-		    if { $old ne "" } {
+		    lappend PLUG(usage) $now $use; # XXX: Contain the length?
+		    if { $old eq "" } {
+			# Generate a Demand event the first time to
+			# allow proper initialisation at callers, tell
+			# it is the first by using a difference that
+			# is zero.
+			::event::generate $p Demand \
+			    [list %p $use %d 0 %t $now]
+		    } else {
 			set diff [expr {$use-$old}]
 			if { [expr {abs($diff)}] >= $PLUG(-react) } {
 			    ::event::generate $p Demand \
@@ -469,6 +482,7 @@ proc ::plugwise::__check:power { p } {
 			::event::generate $p Change \
 			    [list %p $use %d "$old" %t $now]
 		    }
+		    ${log}::debug "Plug using ${use}W"
 		} elseif { [string match "error:*" $l] } {
 		    ${log}::error "Error when communicating with plugwise: $l"
 		    incr errs
@@ -482,7 +496,13 @@ proc ::plugwise::__check:power { p } {
 	    }
 	}
 
-	close $fd
+	# Cautious close, this is where we catch raise conditions
+	# where two (we and another one) processes try to access the
+	# plugwise at the same time.
+	if { [catch {close $fd} err] } {
+	    ${log}::error "Error when communicating with plugwise: $err"
+	    incr errs
+	}
     }
 
     if { [__error $p $errs] >= 0 } {
@@ -553,7 +573,13 @@ proc ::plugwise::__check:energy { p } {
 	    }
 	}
 
-	close $fd
+	# Cautious close, this is where we catch raise conditions
+	# where two (we and another one) processes try to access the
+	# plugwise at the same time.
+	if { [catch {close $fd} err] } {
+	    ${log}::error "Error when communicating with plugwise: $err"
+	    incr errs
+	}
     }
 
     if { [__error $p $errs] >= 0 } {
@@ -737,7 +763,7 @@ proc ::plugwise::new { mac args } {
     set PLUG(mac) $mac;       # MAC address in ZigBee network
     set PLUG(state) NONE;     # State of the state machine
     set PLUG(poll:power) "";  # Identifier of polling command
-    set PLUG(power) {};       # Power usage over time
+    set PLUG(usage) {};       # Power usage over time
     set PLUG(poll:energy) ""; # Identifier of energy consumption polling cmd
     set PLUG(energy) {};      # Energy consumption in Wh over time
     set PLUG(errors) 0;       # Number of errors when polling state
