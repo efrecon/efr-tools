@@ -26,10 +26,10 @@
 ##    automatically "implement" a number of pieces of data. Each of
 ##    these can be specified as part of the links options.
 ##    Implemented are: sampling, which is reflects the -frequency of
-##    the plug, though in milliseconds; power is the instant power
-##    in W as read from the plug, it will only be updated when it
-##    changes; energy will be the W.h for the last entire hour (when
-##    implemented); status is the state of the relay in the plug.
+##    the plug, though in milliseconds; power is the instant power in
+##    W as read from the plug and when changing "noticeably"; energy
+##    will be the W.h for the last entire hour (when implemented);
+##    status is the state of the relay in the plug.
 ##
 ##################
 
@@ -280,10 +280,13 @@ proc ::dev:__plug { p e args } {
 		set state [string is true [$PLUG(plug) get -state]]
 		::dev:__send $p "status" $state
 	    }
-	    Change {
+	    Demand {
 		::dev:__send $p "power" [lindex $args 0]
 	    }
 	    Energy {
+		if { [expr [clock seconds] - [lindex $args 1]] < 3600 } {
+		    ::dev:__send $p "energy" [lindex $args 0]
+		}
 		::dev:__send $p "energy" [lindex $args 0] \
 		    "__when" [lindex $args 1]
 	    }
@@ -339,6 +342,10 @@ proc ::dev:__context { p sock type msg } {
 		# underlying) plug object from the plugwise library,
 		# unless we want to automatically reopen (retry?) the
 		# connection to the context manager in some way.
+		$PWISE(log)::notice "Connection to context lost, removing\
+                                     plug $PLUG(mac) from memory"
+		$PLUG(plug) destroy
+		::uobj::delete $p
 	    }
 	    "connect" {
 		# Associate the socket identifier to our local plug
@@ -350,8 +357,15 @@ proc ::dev:__context { p sock type msg } {
                                    object $PLUG(uuid)"
 		# Send current state and sampling rate to context manager.
 		::dev:__plug $p Switch
-		::dev:__send $p sampling \
-		    [expr [$PLUG(plug) get -frequency]*1000]
+		set power [$PLUG(plug) get power]
+		if { $power ne "" } {
+		    ::dev:__send $p \
+			sampling [expr [$PLUG(plug) get -frequency]*1000] \
+			power [$PLUG(plug) get power]
+		} else {
+		    ::dev:__send $p \
+			sampling [expr [$PLUG(plug) get -frequency]*1000]
+		}
 	    }
 	}
     }
@@ -441,7 +455,7 @@ proc ::dev:init { mac uuid fields } {
 	    upvar \#0 $p PLUG
 	    set PLUG(plug) $plug
 	    ::event::bind $PLUG(plug) Switch "::dev:__plug $p %e"
-	    ::event::bind $PLUG(plug) Change "::dev:__plug $p %e %p"
+	    ::event::bind $PLUG(plug) Demand "::dev:__plug $p %e %p"
 	    ::event::bind $PLUG(plug) Energy "::dev:__plug $p %e %y %t"
 	    set PLUG(mac) [$plug get mac]
 	    set PLUG(sock) ""
