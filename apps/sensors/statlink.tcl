@@ -1,7 +1,7 @@
 set options {
     { logfile.arg "%APPDATA%/me3gas/%progname%.log" "Where to save log for every run" }
     { feed.integer "52002" "Pachube feed to update" }
-    { key.arg "W4mWBqbHZLXaprzEDfeWk1QcHfaSAKxmaXRaczBQVEU4RT0g" "pachube security key" }
+    { key.arg "" "pachube security key" }
     { refresh.integer "2" "Refresh rate for data acquisition" }
     { root.arg "http://efrecon.homedns.org:8808/live" "Root URL or directory to acquire pump data from" }
     { once "" "Should we only run once and then exit?" }
