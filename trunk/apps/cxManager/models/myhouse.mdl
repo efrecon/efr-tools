@@ -305,6 +305,9 @@ WeatherStation wStation {
 IndoorStation flexibility {
     name    "Flexibility combined inner sensor"
 }
+IndoorStation tyndall {
+    name    "Tyndall combined inner sensor"
+}
 SpokenThermometer feltTemp {
     name    "Temperature as we feel it"
 }
