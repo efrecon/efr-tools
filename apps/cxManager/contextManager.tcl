@@ -8,14 +8,14 @@ set options {
     { timeout.integer "10000" "Timeout when triggering callbacks via HTTP" }
     { www.arg "%progdir%/models" "Directory we serve with HTTP" }
     { hostname.arg "" "Our real hostname as from the external world" }
-    { pachkey.arg "Gqpl91eGQHGiUW7wj9FreurApl6SAKxTWG5oRlgvM2dPVT0g" "Key when talking to pachube" }
-    { pairing.arg "" "Pairing configuration" }
+    { pachkey.arg "" "Key when talking to pachube" }
+    { pairing.arg "" "Path to pairing configuration file" }
     { redis.arg "localhost:6379" "Hostname and port of REDIS server, empty to disable" }
 }
 
 array set CM {
     logfd       ""
-    debug       1
+    debug       0
     cx          ""
     realm       "me3gas Context Engine"
     comments    "\#!;"

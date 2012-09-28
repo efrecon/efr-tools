@@ -203,7 +203,7 @@ proc ::object:set { o c qry } {
 	} else {
 	    $CM(log)::debug "Field '$fname' in ${o}<-$SRC(id)\
                              scheduled to be $val at\
-                             [::schema::to_rfc3339 $when]"
+                             [::schema::to_rfc3339 $when s]"
 	}
     }
 
