@@ -1,0 +1,14 @@
+#summary PlugWise bridge
+
+= Introduction =
+
+[http://www.plugwise.com/ PlugWise] are Smart plugs that both can measure the electricity consumption of the device(s) connected to the plug, but also turn them on and off. These plugs are an effort to better, sustainable homes, by allowing both an understanding of your electricity requirements, but also by allowing to switch on and off devices according to some given rules.
+
+The PlugWise bridge implements a duplex connection between a (set of) PlugWise plug(s) and the ContextManager. It will allow you to simply turn on and off your physical devices by simply switching the boolean state of an object in the context.
+
+
+= Details =
+
+The PlugWise bridge is implemented on top of the WebSockets streaming interface to best reaction times. It bridges completely the state of one (or several) physical plug(s) and of (an) object(s) within the ContextManager. Consequently, changes to the state of the physical plug will automatically be reflected into the object in the context; and (relevant) changes to the context object will be propagated to the plug, turning on and off the electrical relay that it carries.
+
+The implementation uses a library that itself is a wrapper around the command line interface of the unofficial [https://bitbucket.org/hadara/python-plugwise/ PlugWise python library].
