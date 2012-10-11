@@ -66,3 +66,5 @@ Once registration has been successful, the mote will start sending data to the b
 The latest version of the UDP library, i.e. the one which is tagged as 1.0.9 from the teapot, does not seem to support IPv6 properly. So, while the code provided in the bridge is working on IPv4, it will not work properly on IPv6. This is the reason why the bridge also supports HTTP and actually favours HTTP. HTTP, being on top of TCP, does not play nicely with sensor networks: its payload is far bigger than the size of a packet in the air and it is statefull. To reduce payload, the bridge also supports WebSockets even though this is not supported by the Contiki implementation in the motes yet.
 
 Also it is essential to let the TCP listening routines to properly pick up an IPv6 interface. I had to switch off all self-validation of the internal httpd to be able to receive data on the TCP socket (HTTP formatted data!).
+
+For an easier (but with caveats) bridge to other sensors, have a look at SimpleSensorBridge.
