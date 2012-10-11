@@ -16,3 +16,9 @@ The SimpleSensorBridge is implemented using the application called {{{devpoll.tc
   * {{{-report}}} contains a list of triplets with the following meaning:
     * The URL of the JSON expression containing data from the sensor. This can (should?) contain IPv6 addresses.
     * The UUID of the object in the context that will receive the data.
+    * A list of matching between the fields of the JSON expression and the fields of the object. This list should contain pairs containing the name of the field in the JSON and the name of the field in the object.
+
+
+= Caveats =
+
+HTTP usually represents a big overhead to simply get data in the form of a JSON expression from sensor networks. In meshing networks, most of the network will be carrying meta-information, as formed by the HTTP protocol headers, rather than the data itself.
