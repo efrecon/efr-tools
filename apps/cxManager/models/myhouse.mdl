@@ -22,6 +22,14 @@ Address aSoderman10 {
     country      "Sweden"
 }
 
+Address sics {
+    street       "Isafjordsgatan"
+    streetNumber 22
+    areaCode     16440
+    city         "Kista"
+    country      "Sweden"
+}
+
 # Approximate center of our lot.
 Coordinate myPosition {
     latitude  59.299428
@@ -284,6 +292,14 @@ Door garageDoor {
     to    garage
 }
 
+#######
+# Habitants
+Person emmanuel {
+    name     "Emmanuel Frécon"
+    worksAt  sics
+    livesAt  aSoderman10
+    sleepsIn parents
+}
 
 #######
 # Devices
@@ -337,4 +353,22 @@ MeasuredSwitch lamp {
 }
 MeasuredSwitch hairDryer {
     name "Controlled Hair Dryer"
+}
+
+####
+# Heating zones in Crossleigh
+GasMeter gasMeter1 {
+    name "Crossleigh Gas Meter - Zone 1"
+}
+GasMeter gasMeter2 {
+    name "Crossleigh Gas Meter - Zone 2"
+}
+GasMeter gasMeter3 {
+    name "Crossleigh Gas Meter - Zone 3"
+}
+GasMeter gasMeter4 {
+    name "Crossleigh Gas Meter - Zone 4"
+}
+CrossleighCombo crossleigh {
+    name "Combo Object gathering many Crossleigh data"
 }
