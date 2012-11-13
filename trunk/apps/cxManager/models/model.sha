@@ -9,6 +9,7 @@ Space {
     contains Space[]
     connectors Connector[]
     devices Device[]
+    inhabitants Person[]
     Outside {
     }
     Building {
@@ -176,6 +177,9 @@ Device {
 		    energy Energy
 		}
 	    }
+	    GasMeter {
+		energy Energy
+	    }
 	    LightSource {
 		power Power
 		luminousIntensity LuminousIntensity
@@ -218,16 +222,25 @@ Device {
 	    }
         }
     }
+    CrossleighCombo {
+	upperFloorsElectricity Energy
+	lowerFloorElectricity Energy
+	zone2Heating Integer
+	zone4Heating Integer
+	mainGas Integer
+	boilerHouse Temperature
+    }
 }
 
 Person {
     name String
     pos Coordinate
-    livesAt Address[]
-    worksAt Address[]
+    livesAt Address
+    worksAt Address
     carries Device[]
     sleepsIn Bedroom
     worksIn Office
+    present Boolean
 }
 
 App {
