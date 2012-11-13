@@ -127,8 +127,7 @@ foreach udp $CTKI(udp_order) {
     }
 }
 if { $CTKI(udp) eq "" } {
-    $CTKI(log)::error "No support for UDP found, exiting"
-    exit
+    $CTKI(log)::critical "No support for UDP found."
 }
 
 
@@ -582,6 +581,7 @@ proc ::net:init {} {
 	set SERVER(id) $srv
 	set SERVER(port) $port
 	set SERVER(protocol) $proto
+	set SERVER(sock) ""
 	
 	switch -nocase -- $SERVER(protocol) {
 	    "udp" {
@@ -604,8 +604,14 @@ proc ::net:init {} {
 			    [list ::udp:receiver $SERVER(sock)]
 		    }
 		}
-		$CTKI(log)::notice "Now listening on UDP port $SERVER(port)\
-                                    for incoming data"
+		if { $SERVER(sock) eq "" } {
+		    $CTKI(log)::notice "Cannot listen on UDP port $SERVER(port)\
+                                        no support for UDP found"
+		    ::uobj::delete $srv
+		} else {
+		    $CTKI(log)::notice "Now listening on UDP port $SERVER(port)\
+                                        for incoming data"
+		}
 	    }
 	    "http" {
 		set myaddr $CTKI(myaddr)
