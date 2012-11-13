@@ -38,14 +38,14 @@ package require Tcl
 set options {
     { logfile.arg "%APPDATA%/me3gas/%progname%.log" "Where to save log for every run" }
     { context.arg "http://localhost:8802/" "Root URL to context manager" }
-    { links.arg "729C24 5360eae6-a1cd-5e98-014f-127f395074f4 {status:status power energy sampling} 729972 e4cb4459-6acf-528e-7b5b-f2f4197674de {status power energy sampling}" "List of plugise MAC matches to UUID and plug:field names" }
+    { links.arg "" "List of plugise MAC matches to UUID and plug:field names" }
     { serial.arg "/dev/ttyUSB0" "Serial device to use for comm. to plugwise" }
 }
 
 array set PWISE {
     logfd       ""
     debug       0
-    open_spread 3000
+    open_spread 10000
 }
 
 
