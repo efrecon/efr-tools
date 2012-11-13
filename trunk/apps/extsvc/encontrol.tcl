@@ -12,7 +12,7 @@ set options {
     { logfile.arg "%APPDATA%/me3gas/%progname%.log" "Where to save log for every run" }
     { port.integer "8899" "Port number of the web server that we implement" }
     { hostname.arg "" "Our real hostname as from the external world" }
-    { mappings.arg {http://localhost:8802/ 55851044-b290-56a5-3c88-d64ffbfa75e9 %outside%*1.03 mote4.temp0 http://localhost:8802/ fc24cc87-dbfb-5243-5e9c-06ffd532a473 %temperature% mote7.temp0} "Available mappings" }
+    { mappings.arg {http://localhost:8802/ 55851044-b290-56a5-3c88-d64ffbfa75e9 %outside% mote4.temp0 http://localhost:8802/ fc24cc87-dbfb-5243-5e9c-06ffd532a473 %temperature% mote7.temp0} "Available mappings" }
     { credentials.arg "" "Credentials when accessing enControl, separated by colon sign" }
 }
 
