@@ -118,6 +118,56 @@ make tinynode.exe from tinynode.kit using {
 make tinynode from tinynode.exe using ""
 
 
+make snoop_motes.kit from [list [file join $topdir snoop_motes.tcl] \
+                               messages] using {
+    ::binmake::kit $::topdir snoop_motes -extras [list msgs] \
+	-version 8.6b \
+        -tcllib [list log cmdline fileutil json base64 uri] \
+        -tclbi [list fileutil json base64 Trf uri tdom tcom] \
+        -tclpot [list fileutil json base64 uri tdom tls Trf tcom] \
+        -tclcore [list reg] \
+        -lib [list bootstrap.tcl init.tcl tkconclient progver \
+		  event rest http cxapi] \
+        -til [list uobj diskutil errhan]
+}
+make snoop_motes.exe from snoop_motes.kit using {
+    set vsn [::progver::guess snoop_motes]
+    ::binmake::executable $::topdir snoop_motes console:8.6b \
+        appicons [file join pics tinynode.ico] \
+        version $vsn \
+        descr "Polls remote server and send measures to context manager" \
+        company "SICS" \
+        copyright "Emmanuel Frécon" \
+        product "SnoopMotes"
+}
+make snoop_motes from snoop_motes.exe using ""
+
+make transformer.kit from [list [file join $topdir transformer.tcl] \
+                               messages] using {
+    ::binmake::kit $::topdir transformer -extras [list msgs] \
+	-version 8.6b \
+        -tcllib [list log cmdline fileutil html ncgi textutil json md5 \
+		     base64 uri dns uuid] \
+        -tclbi [list fileutil json base64 Trf uri tdom tcom] \
+        -tclpot [list fileutil json base64 md5 sha1 uri tdom tls Trf tcom] \
+        -tclcore [list reg] \
+        -lib [list bootstrap.tcl init.tcl tkconclient progver \
+		  event http cxapi] \
+        -til [list uobj diskutil errhan minihttpd websocket mimetype]
+}
+make transformer.exe from transformer.kit using {
+    set vsn [::progver::guess transformer]
+    ::binmake::executable $::topdir transformer console:8.6b \
+        appicons [file join pics transformer.ico] \
+        version $vsn \
+        descr "Sink for context object, sending tranformed data to sensors." \
+        company "SICS" \
+        copyright "Emmanuel Frécon" \
+        product "Transformer"
+}
+make transformer from transformer.exe using ""
+
+
 # Automate constuction of distribution ZIP file, use the version
 # contained in the version file.
 set pver [join [split [::progver::guess lampcontroller] "."] ""]
@@ -137,7 +187,7 @@ make MD5SUMS from [list lampcontroller.exe lampcontroller.cfg lampcontroller.pwd
 
 # cleanup Rule
 make.force clean from [list] using {
-    foreach a [list statlink tinynode] {
+    foreach a [list statlink tinynode snoop_motes transformer] {
 	puts "Removing $a"
 	catch {file delete ${a}.exe}
 	catch {file delete ${a}.kit}
