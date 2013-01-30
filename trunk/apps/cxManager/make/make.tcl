@@ -82,7 +82,7 @@ make contextmanager.kit from [list [file join $topdir contextmanager.tcl] \
 		  uuidhash tkconclient progver event schema model \
 		  oauth conduits rest udp1.0.9 db ssdp UPnP cxapi \
 		  redis] \
-	-til [list uobj diskutil errhan minihttpd mimetype tax]
+	-til [list uobj diskutil errhan minihttpd mimetype tax websocket]
 }
 make contextmanager.exe from contextmanager.kit using {
     set vsn [::progver::guess contextmanager]
