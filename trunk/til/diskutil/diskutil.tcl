@@ -31,6 +31,7 @@ namespace eval ::diskutil {
 	    tmpdir             ""
 	    winemu_dir         "~/.CommonStore"
 	    loglevel           warn
+	    comments           "\#"
 	    dft_prgpath        ""
 	}
 	variable log [::logger::init diskutil]
@@ -1078,4 +1079,70 @@ proc ::diskutil::signature { fname args } {
     unset Signature
 
     return $sig
+}
+
+
+# ::diskutil::lread -- Read lists from file
+#
+#       This is a generic "list reading" procedure that will read the
+#       content of files where each line represents one element of a
+#       list.  The procedure will gracefully ignore comments and empty
+#       lines, thus providing a raw mechanism for reading
+#       configurations files in a number of cases.  The procedure is
+#       also able to count and control the number of elements in the
+#       list that is read, forcing them to be a multiplier of xx and
+#       cutting away the last elements not following the rule if
+#       necessary.  This makes it perfect for parsing the result of
+#       file reading using a foreach command.
+#
+# Arguments:
+#	fname	Path to file to read
+#	divider	Multiplier for number of elements, negative or zero to turn off
+#	type	Type of file being read, used for logging output only.
+#
+# Results:
+#       Return the elements contained in the file as a list.  If the
+#       number of elements in the list had to be a multiplier of xx,
+#       ending elements that do not follow the rule (if any) are
+#       removed.  The list is empty on errors (or when no elements
+#       were contained in the file.
+#
+# Side Effects:
+#       None.
+proc ::diskutil::lread { fname { divider -1 } { type "file" } } {
+    variable DiskUtil
+    variable log
+    
+    set vals [list]
+    ${log}::info "Reading $type from $fname"
+    if { [catch {open $fname} fd] } {
+	${log}::error "Could not read $type from $fname: $fd"
+    } else {
+	while { ! [eof $fd] } {
+	    set line [string trim [gets $fd]]
+	    if { $line ne "" } {
+		set firstchar [string index $line 0]
+		if { [string first $firstchar $DiskUtil(comments)] < 0 } {
+		    lappend vals $line
+		}
+	    }
+	}
+	close $fd
+
+	set len [llength $vals]
+	if { $divider > 0 } {
+	    if { [expr {$len % $divider}] != 0 } {
+		set keep [expr {($len / $divider)*$divider}]
+		${log}::warn "$type $fname contained $len elements,\
+                              wrong numer! Keeping $keep first ones"
+		set vals [lrange $vals 0 [expr {$keep - 1}]]
+	    } else {
+		${log}::debug "Read $len elements from $type $fname"
+	    }
+	} else {
+	    ${log}::debug "Read $len elements from $type $fname"
+	}
+    }
+
+    return $vals
 }
