@@ -473,10 +473,12 @@ proc ::dev:__create { ip port key token } {
 		# Report current value at once, otherwise we will have
 		# to wait for a whole sampling period for reporting.
 		::report $dev; 
+	    } else {
+		$CTKI(log)::notice "Device at $ip has no resource called $key:\
+                                    available are [dict keys $rsc]"
 	    }
 	} else {
-	    $CTKI(log)::notice "Device at $ip has no resource called $key:\
-                                available are [dict keys $rsc]"
+	    $CTKI(log)::notice "Device at $ip has no resource descriptions"
 	}
 
 	if { $dev ne "" } {
