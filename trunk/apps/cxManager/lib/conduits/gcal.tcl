@@ -149,71 +149,6 @@ proc ::gcal::pair:check { p } {
 }
 
 
-proc ::gcal::from_rfc3339 { str { unit s } } {
-    set usecs ""
-    if { [regexp {(\d+)-(\d+)-(\d+)T(\d{2}):(\d{2}):(\d{2}).(\d+)([+-])(\d{2}):(\d{2})} $str match y m d H M S ms offset tzh tzm] } {
-	set secs [clock scan "$y $m $d $H:$M:$S ${offset}$tzh$tzm" \
-		      -format "%Y %m %d %T %z"]
-	if { [string length $ms] == 3 } {
-	    set usecs [expr {$secs*1000000 + $ms*1000}]
-	} elseif { [string length $ms] == 6 } {
-	    set usecs [expr {$secs*1000000 + $ms}]
-	}
-    } elseif { [regexp {(\d+)-(\d+)-(\d+)T(\d{2}):(\d{2}):(\d{2})([+-])(\d{2}):(\d{2})} $str match y m d H M S offset tzh tzm] } {
-	set secs [clock scan "$y $m $d $H:$M:$S ${offset}$tzh$tzm" \
-		      -format "%Y %m %d %T %z"]
-	set usecs [expr {$secs*1000000}]
-    }
-    if { $usecs ne "" } {
-	switch $unit {
-	    us {
-		return $usecs
-	    }
-	    ms {
-		return [expr {$usecs/1000}]
-	    }
-	    s {
-		return [expr {$usecs/1000000}]
-	    }
-	}
-    }
-    return -code error "Cannot convert incoming string $str to $unit"
-}
-
-
-proc ::gcal::to_rfc3339 { { us "" } { unit us } { variant us } } {
-    if { $us eq "" } {
-	set us [clock microseconds]
-    } else {
-	switch $unit {
-	    us {
-	    }
-	    ms {
-		set us [expr {$us * 1000}]
-	    }
-	    s {
-		set us [expr {$us * 1000000}]
-	    }
-	}
-    }
-    set secs [expr {$us / 1000000}]
-    set micro [expr {$us % 1000000}]
-    set ts [clock format $secs -format "%Y-%m-%dT%T"]
-    regexp {(...)(..)} [clock format $secs -format "%z"] matched tzh tzm
-    switch $variant {
-	"us" {
-	    return [format "%s.%06s%s:%s" $ts $micro $tzh $tzm]
-	}
-	"ms" {
-	    return [format "%s.%03s%s:%s" $ts [expr {$micro/1000}] $tzh $tzm]
-	}
-	"s" {
-	    return [format "%s%s:%s" $ts $tzh $tzm]
-	}
-    }
-}
-
-
 proc ::gcal::get_events { p { now "" } } {
     variable GCAL
     variable log
@@ -232,8 +167,8 @@ proc ::gcal::get_events { p { now "" } } {
     if { $now eq "" } {
 	set now [clock seconds]
     }
-    set min [to_rfc3339 [expr {$now - $GCAL(-span)*60*60}] s s]
-    set max [to_rfc3339 [expr {$now + $GCAL(-span)*60*60}] s s]
+    set min [::schema::to_rfc3339 [expr {$now - $GCAL(-span)*60*60}] s s]
+    set max [::schema::to_rfc3339 [expr {$now + $GCAL(-span)*60*60}] s s]
     while { !$done} {
 	set res [::gcal::handle_redir ::gcal::all_events \
 		     -token $PAIR(token) \
@@ -259,21 +194,31 @@ proc ::gcal::get_events { p { now "" } } {
 
 	# Get and dump events:
 	foreach evt [dict get $data items] {
-	    set e [::uobj::new [namespace current] event [::uobj::id $p]]
-	    upvar \#0 $e EVT
+	    # Store and translate from Google event fields into a
+	    # transient array that is almost in the format of the
+	    # events that will be added to <events>
 	    foreach {gkey ekey} { id id selfLink link title title \
 				      details details location where } {
 		if { [dict exists $evt $gkey] } {
-		    set EVT($ekey) [dict get $evt $gkey]
+		    set GEVT($ekey) [dict get $evt $gkey]
 		} else {
-		    set EVT($ekey) ""
+		    set GEVT($ekey) ""
 		}
 	    }
-	    set when [lindex [dict get $evt when] 0]
-	    set EVT(start) [from_rfc3339 [dict get $when start] s]
-	    set EVT(end) [from_rfc3339 [dict get $when end] s]
-	    
-	    lappend events $e
+
+	    # Create an event from each period found in the calendar
+	    # event field "when" and append it to the events list
+	    # after having copied the "global" data for the event
+	    # contained in GEVT and extracted above.
+	    foreach when [dict get $evt when] {
+		set e [::uobj::new [namespace current] event [::uobj::id $p]]
+		upvar \#0 $e EVT
+		array set EVT [array get GEVT]
+		set EVT(start) [::schema::from_rfc3339 [dict get $when start] s]
+		set EVT(end) [::schema::from_rfc3339 [dict get $when end] s]
+
+		lappend events $e
+	    }
 	}
     }
 
@@ -298,9 +243,10 @@ proc ::gcal::pair:__copy_once { p } {
 
     foreach e $events {
 	upvar \#0 $e EVT
-	${log}::debug "Testing if current date [to_rfc3339 $now s s] is\
-                       between [to_rfc3339 $EVT(start) s s] and\
-                       [to_rfc3339 $EVT(end) s s] (title: $EVT(title))"
+	${log}::debug "Testing if current date [::schema::to_rfc3339 $now s s]\
+                       is between [::schema::to_rfc3339 $EVT(start) s s] and\
+                       [::schema::to_rfc3339 $EVT(end) s s]\
+                       (title: $EVT(title))"
 	if { $now >= $EVT(start) && $now < $EVT(end) } {
 	    foreach {dst src} $PAIR(-translations) {
 		set dst_fields [pair:__extract_fields $dst]
@@ -661,13 +607,16 @@ proc ::gcal::__init {} {
 }
 
 proc ::gcal::handle_redir {args} {
+    variable log
+
     if {[catch {eval $args} out]} {
-        #puts "catch $out"
         if {[lindex $out 1] == "302"} {
             eval [linsert $args 1 -gsessionid [rest::parameters [lindex $out 2] gsessionid]]
-        } else {
-            return -code error $out
-        }
+	} else {
+	    return -code error $out
+	}
+    } else {
+	return $out
     }
 }
 
