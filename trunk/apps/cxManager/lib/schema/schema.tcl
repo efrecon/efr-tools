@@ -81,14 +81,18 @@ proc ::schema::from_rfc3339 { str { unit s } } {
     # Parse incoming timestamp into seconds (since the period) and
     # microseconds
     set usecs ""
+    # Fix Zulu so that it's understood as +00.00, meaning UTC
+    if { [string index $str end] eq "Z" } {
+	set str "[string range $str 0 end-1]+00:00"
+    }
     if { [regexp {(\d+)-(\d+)-(\d+)T(\d{2}):(\d{2}):(\d{2}).(\d+)([+-])(\d{2}):(\d{2})} $str match y m d H M S fs offset tzh tzm] } {
 	set secs [clock scan "$y $m $d $H:$M:$S ${offset}$tzh$tzm" \
 		      -format "%Y %m %d %T %z"]
-	set usecs [expr {int(1000000*0.${fs})}]
+	set usecs [expr 1000000*$secs+int(1000000*0.${fs})]
     } elseif { [regexp {(\d+)-(\d+)-(\d+)T(\d{2}):(\d{2}):(\d{2})([+-])(\d{2}):(\d{2})} $str match y m d H M S offset tzh tzm] } {
 	set secs [clock scan "$y $m $d $H:$M:$S ${offset}$tzh$tzm" \
 		      -format "%Y %m %d %T %z"]
-	set usecs [expr {$secs*1000000}]
+	set usecs [expr $secs*1000000]
     }
 
     # Return according to the time unit that was requested.
