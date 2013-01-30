@@ -31,6 +31,7 @@ namespace eval ::init {
 	    -loaded      ""
 	    -progress    0
 	    -quiet       {}
+	    -sources     {}
 	    -store       ""
 	    -splash      ""
 	    -callback    ""
