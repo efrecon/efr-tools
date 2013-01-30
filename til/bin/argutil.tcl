@@ -17,6 +17,7 @@
 # See the file "license.terms" for information on usage and redistribution
 # of this file, and for a DISCLAIMER OF ALL WARRANTIES.
 
+package require Tcl 8.2
 package provide argutil 1.5
 
 namespace eval ::argutil {
@@ -35,6 +36,7 @@ namespace eval ::argutil {
 	    -autounwrap on
 	    -tmpmake    32767
 	    -tmppfx     "tcltmp_"
+	    -packed     {.tm .zip .kit}
 	}
 	variable libdir [file dirname [file normalize [info script]]]
     }
@@ -640,28 +642,29 @@ proc ::argutil::searchlib { libname paths { version "" } } {
 	set idx 0
 	foreach p $libpaths {
 	    # Find the name of the library in the path
-	    set l_idx [string last "$libname" $p]
+	    set l_idx [string last $libname $p]
 	    if { $l_idx >= 0 } {
 		# Advance to first non alpha character, the substring
 		# is the name of the library (as analyzed from the
 		# directory name)
 		set libnamefromdir [string range $p $l_idx end]
-		set rawlibname $libnamefromdir
-		for { set i $l_idx } { $i < [string length $p] } { incr i } {
-		    set ch [string index $p $i]
-		    if { ! [string is alpha $ch] && $ch ne "_" } {
-			set libnamefromdir \
-			    [string range $p $l_idx [expr $i - 1]]
-			break
+
+		set unpackedname $libnamefromdir
+		foreach ext $AU(-packed) {
+		    if { [file extension $libnamefromdir] eq $ext } {
+			set unpackedname [file rootname $libnamefromdir]
 		    }
 		}
+		set rawlibname $unpackedname
 
+		set vercontainer [string map [list $libname ""] $unpackedname]
 		# Try to advance to first digit and consider all remaining
 		# characters (including the digit) as the version number
 		set v_num ""
-		for { } { $i < [string length $p] } { incr i } {
-		    if { [string is digit [string index $p $i]] } {
-			set v_num [string trim [string range $p $i end]]
+		for {set i 0} { $i < [string length $vercontainer] } {incr i} {
+		    if { [string is digit [string index $vercontainer $i]] } {
+			set v_num \
+			    [string trim [string range $vercontainer $i end]]
 			if { [regexp {^[_.\-\d]+$} $v_num] } {
 			    break
 			} else {
@@ -669,7 +672,6 @@ proc ::argutil::searchlib { libname paths { version "" } } {
 			    # rather a number in the middle of the
 			    # filename...
 			    set v_num ""
-			    set libnamefromdir $rawlibname
 			}
 		    }
 		}
@@ -679,10 +681,8 @@ proc ::argutil::searchlib { libname paths { version "" } } {
 		# number or if we found a library without any version
 		# number (strict match on the name) add it to the list
 		# of paths to consider.
-		if { [string equal $libname $libnamefromdir] } {
-		    __log debug "Found one match for $libname: $p, v. $v_num"
-		    lappend maxver_l [list $v_num $idx]
-		}
+		__log debug "Found one match for $libname: $p, v. $v_num"
+		lappend maxver_l [list $v_num $idx]
 	    }
 	    incr idx
 	}
