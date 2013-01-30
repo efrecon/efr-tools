@@ -23,6 +23,8 @@ namespace eval ::binmake {
     if { ! [info exists BM] } {
 	array set BM {
 	    dt_fmt       "%Y%m%d"
+	    minver       7
+	    maxver       9
 	}
 	variable libdir [file dirname [file normalize [info script]]]
     }
@@ -124,10 +126,34 @@ proc ::binmake::directories { { version "8.5.8" } } {
     set dirs(til) [file join $::argutil::libdir ..]
     set dirs(core) [info library]
     set dirs(bi) [file join $dirs(core) ..]
+
+    # Find the top directory for where the teapot packages are
+    # installed, from there get to the ones that are generic (i.e. not
+    # Tcl modules, but rather packages), the one that contain binary
+    # (for that platform) and then enumerate the directories that
+    # could be found containing Tcl modules so we can find them.  Note
+    # that finding modules these way might pose backward compatibility
+    # issues since we are going back in time a lot. Maybe do we want
+    # to keep to the same major version number as the one for the
+    # version that was passed as an argument.
     set dirs(pots) [file join $dirs(core) .. teapot package]
     set dirs(pot) [list \
 		       [file join $dirs(pots) tcl lib] \
 		       [file join $dirs(pots) [::platform::identify] lib]]
+    for {set main $BM(minver)} { $main <= $BM(maxver) } { incr main } {
+	for { set sub 0 } { $sub < 10 } { incr sub } {
+	    foreach pkg { tcl tk } {
+		set d [file join $dirs(pots) $pkg teapot \
+			   ${pkg}${main} ${main}.${sub}]
+		if { [file isdirectory $d] } {
+		    lappend dirs(pot) $d
+		}
+	    }
+	}
+    }
+
+    # Find the places that can contain the til and tklib, at the
+    # highest version if relevant and several found.
     foreach {vernum path} [::argutil::searchlib tcllib \
 			       [list $dirs(bi) $dirs(core) \
 				    [file join $dirs(til) ..]]] break
@@ -146,7 +172,10 @@ proc ::binmake::directories { { version "8.5.8" } } {
 #	This procedure gathers all the necessary elements for the
 #	construction of a tclkit for an application.  These elements
 #	are taken both from the current tcl installation and from the
-#	unkitted version of the application to be made.
+#	unkitted version of the application to be made.  Note that
+#	specific attention is paid to Tcl modules, as these are placed
+#	under the site-tcl directory in the kit so they can be found
+#	by a package require as from within the application.
 #
 # Arguments:
 #	topdir	Top directory containing the application
@@ -162,11 +191,24 @@ proc ::binmake::directories { { version "8.5.8" } } {
 #	a tclkit.
 proc ::binmake::kit { topdir app args } {
     variable BM
-    
-    array set dirs [directories]
+
+    # TODO: Maybe do we actually want to make a distinction between
+    # site-tcl and non site.  Things that would come from core
+    # components such as the batteries included packages, the core,
+    # etc. could be installed there, which "local" stuff, less
+    # official (the til, internal libraries, etc.) could be installed
+    # as at present, i.e. in the lib directory.
+
+    # Use default or forced version.
+    array set opts $args
+    if { [array names opts -version] ne "" } {
+	puts "Forcing version $opts(-version) !"
+	array set dirs [directories $opts(-version)]
+    } else {
+	array set dirs [directories]
+    }
     set version [clock format [clock seconds] -format $BM(dt_fmt)]
     set tmpdir [file join $topdir tmp${version}_${app}]
-    array set opts $args
 
     set curdir [pwd]
     file delete -force $tmpdir
@@ -204,10 +246,11 @@ proc ::binmake::kit { topdir app args } {
     if { [array names opts -tclbi] ne "" } {
 	puts "Installing batteries included modules..."
 	foreach m $opts(-tclbi) {
-	    puts "  $m -> ${app}.vfs/lib"
+	    puts -nonewline "  $m -> ${app}.vfs/lib"
 	    foreach {vernum src} [::argutil::searchlib $m $dirs(bi)] break
 	    if { $src ne "" } {
 		file copy -force $src ${app}.vfs/lib
+		puts ""
 	    } else {
 		puts "  !! Cannot find $m !!"
 	    }
@@ -217,10 +260,22 @@ proc ::binmake::kit { topdir app args } {
     if { [array names opts -tclpot] ne "" } {
 	puts "Installing teapot controlled modules..."
 	foreach m $opts(-tclpot) {
-	    puts "  $m -> ${app}.vfs/lib"
+	    puts -nonewline "  $m -> ${app}.vfs/lib"
 	    foreach {vernum src} [::argutil::searchlib $m $dirs(pot)] break
 	    if { $src ne "" } {
-		file copy -force $src ${app}.vfs/lib
+		if { [file extension $src] eq ".tm" } {
+		    # XX: Use which version number here, the one from
+		    # the interpreter used for "compiling" or the one
+		    # from the default or forced version of the
+		    # destination kit.
+		    foreach {major minor} [split $::tcl_version "."] break
+		    file mkdir ${app}.vfs/lib/tcl${major}/site-tcl
+		    file copy -force $src ${app}.vfs/lib/tcl${major}/site-tcl
+		    puts " (module! copied into site-tcl)"
+		} else {
+		    file copy -force $src ${app}.vfs/lib
+		    puts ""
+		}
 	    } else {
 		puts "  !! Cannot find $m !!"
 	    }
@@ -230,10 +285,11 @@ proc ::binmake::kit { topdir app args } {
     if { [array names opts -tclcore] ne "" } {
 	puts "Installing Tcl core modules..."
 	foreach m $opts(-tclcore) {
-	    puts "  $m -> ${app}.vfs/lib"
+	    puts -nonewline "  $m -> ${app}.vfs/lib"
 	    foreach {vernum src} [::argutil::searchlib $m $dirs(core)] break
 	    if { $src ne "" } {
 		file copy -force $src ${app}.vfs/lib
+		puts ""
 	    } else {
 		puts "  !! Cannot find $m !!"
 	    }
@@ -243,12 +299,13 @@ proc ::binmake::kit { topdir app args } {
     if { [array names opts -lib] ne "" } {
 	puts "Installing local library modules..."
 	foreach m $opts(-lib) {
-	    puts "  $m -> ${app}.vfs/lib"
+	    puts -nonewline "  $m -> ${app}.vfs/lib"
 	    set src [::argutil::resolve_links [file join .. lib $m]]
 	    if { $src ne "" } {
 		foreach fname [glob -- $src] {
 		    file copy -force $fname ${app}.vfs/lib
 		}
+		puts ""
 	    } else {
 		puts "  !! Cannot find $m !!"
 	    }
@@ -384,7 +441,9 @@ proc ::binmake::__makerc { rcfname args } {
 # Arguments:
 #	topdir	Top directory containing the application
 #	app	Name of the application
-#	type	Type of the final binary to make (console or gui)
+#	type	Type of the final binary to make (console or gui).
+#               Note that specific version number to use can be appended
+#               after a colon sign.
 #
 # Results:
 #	Return the name of the executable that was generated
@@ -395,8 +454,17 @@ proc ::binmake::__makerc { rcfname args } {
 #	directory) and generates a binary executable
 proc ::binmake::executable { topdir app type args } {
     variable BM
-    
-    array set dirs [directories]
+
+    # Extract the (forced) version number to use for the final
+    # executable from after the colon sign in the application type, if
+    # any.  This will force the executable to be using the tclkit at
+    # that version
+    foreach {type version} [split $type ":"] break
+    if { $version eq "" } {
+	array set dirs [directories]
+    } else {
+	array set dirs [directories $version]
+    }
     set version [clock format [clock seconds] -format $BM(dt_fmt)]
     set tmpdir [file join $topdir tmp${version}_${app}]
     
