@@ -157,8 +157,12 @@ proc ::object:push { o c qry } {
 	    set fname [$f get -name]
 	    if { [dict keys $qry $fname] ne "" } {
 		set val [dict get $qry $fname]
-		::object:update $o $f $val
-		lappend updates $fname $val
+		if { [catch {::object:update $o $f $val} err] == 0 } {
+		    lappend updates $fname $val
+		} else {
+		    $CM(log)::warn "Could not update field $f in $o to\
+                                    '$val': $err"
+		}
 	    }
 	}
     }
@@ -328,9 +332,14 @@ proc ::rest:append { prt sock url qry } {
 		foreach f [$s get fields] {
 		    set fname [$f get -name]
 		    if { [dict keys $qry $fname] ne "" } {
-			::object:append $o $f [dict get $qry $fname]
-			$CM(log)::debug "Appended to field '$fname' in $o:\
-                                         [dict get $qry $fname]" 
+			if { [catch {::object:append $o $f \
+					 [dict get $qry $fname]} err] == 0 } {
+			    $CM(log)::debug "Appended to field '$fname' in $o:\
+                                             [dict get $qry $fname]"
+			} else {
+			    $CM(log)::warn "Could not append to field '$fname'\
+                                            in $o: $err"
+			} 
 		    }
 		}
 	    }
