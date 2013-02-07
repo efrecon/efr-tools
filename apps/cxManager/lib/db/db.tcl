@@ -255,8 +255,8 @@ proc ::db::__flush { db o } {
     }
 
     # Empty the output timer and the hints. 
-    ::uobj::keyword $o output ""
-    ::uobj::keyword $o hints ""
+    ::uobj::keyword $o db/output ""
+    ::uobj::keyword $o db/hints ""
 }
 
 
@@ -415,7 +415,7 @@ proc ::db::__redis { db o } {
     upvar \#0 $db D
     upvar \#0 $o OBJ
 
-    set redis [::uobj::keyword $OBJ(id) redis]
+    set redis [::uobj::keyword $OBJ(id) db/redis]
     if { $redis eq "" } {
 	${log}::debug "No REDIS database associated to object $OBJ(id) yet,\
                        picking up last used one"
@@ -431,7 +431,7 @@ proc ::db::__redis { db o } {
                           $server"
 	}
 	set redis [dbopen $db $server]
-	::uobj::keyword $OBJ(id) redis $redis
+	::uobj::keyword $OBJ(id) db/redis $redis
     }
 
     return $redis
@@ -471,18 +471,18 @@ proc ::db::__write { db varname idx op } {
 		      # index id, which is an undocumented feature.
 
     # Arrange to push data to the database within -flush milliseconds.
-    set delay [::uobj::keyword $V(id) output]
+    set delay [::uobj::keyword $V(id) db/output]
     if { $delay eq "" } {
 	set delay [after $D(-flush) \
 		       [namespace current]::__flush $db $V(id)]
-	::uobj::keyword $V(id) output $delay
+	::uobj::keyword $V(id) db/output $delay
     }
 
     # Remember what was changed in the object, make sure we do this
     # only once, no point otherwise...
-    set hints [::uobj::keyword $V(id) hints]
+    set hints [::uobj::keyword $V(id) db/hints]
     lappend hints $idx
-    ::uobj::keyword $V(id) hints [lsort -unique $hints]
+    ::uobj::keyword $V(id) db/hints [lsort -unique $hints]
 }
 
 
