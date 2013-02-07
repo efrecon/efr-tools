@@ -11,6 +11,7 @@ set options {
     { pachkey.arg "" "Key when talking to pachube" }
     { pairing.arg "" "Path to pairing configuration file" }
     { redis.arg "localhost:6379" "Hostname and port of REDIS server, empty to disable" }
+    { history.arg "%progdir%/history" "Directory for CSV output, empty to disable" }
 }
 
 array set CM {
@@ -131,7 +132,7 @@ proc log:out {dt srv lvl str} {
     -options $options \
     -booleans [list] \
     -depends [list event uuidhash oauth rest redis udp] \
-    -load [list minihttpd websocket schema model db ssdp UPnP cxapi] \
+    -load [list minihttpd websocket schema model db ssdp UPnP cxapi csvout] \
     -packages [list struct::tree http uuid] \
     -sources [list json find trigger rest tree api pairing] \
     -parsed ::init:fix \
@@ -255,6 +256,9 @@ set CM(cx) [::model::new $s]
 $CM(cx) create [::diskutil::fname_resolv $CM(context)] name
 if { $CM(redis) ne "" } {
     set CM(permanent) [::db::new $CM(cx) -redis $CM(redis)]
+}
+if { $CM(history) ne "" } {
+    set CM(csv) [::csvout::new $CM(cx) -dir $CM(history)]
 }
 
 # Initialise all conduits for all supported servers
