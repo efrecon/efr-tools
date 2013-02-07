@@ -32,6 +32,7 @@ set options {
     { unit.arg {\[.*\]\s*[\.\d]+\s+(\w*)} "Regular expression to extract unit from lines" }
     { convert.arg "" "Conversion to perform on value, if any" }
     { format.arg "" "Format of the timestamp, empty for free format scan" }
+    { caching.double "0.2" "Caching factor for device data retention (rel. to refresh period)" }
 }
 
 array set RPT {
@@ -325,14 +326,11 @@ proc ::extract { data { convert "" } } {
     return ""
 }
 
-
-proc ::latest { dev { lbl "" } } {
+proc ::getdata { dev } {
     global RPT
 
-    set now [clock seconds]
-    set root [string trimright $RPT(root) "/"]/[clock format $now -format "%Y"]/[clock format $now -format "%m"]/[clock format $now -format "%d"]
-
     set root [string trimright $RPT(root) "/"]
+    $RPT(log)::debug "Getting latest value for device $dev at $root"
 
     set data ""
     set url ${root}/${dev}$RPT(extension)
@@ -360,7 +358,6 @@ proc ::latest { dev { lbl "" } } {
 	    }
 	    ::http::cleanup $token
 	}
-	
     } else {
 	$RPT(log)::notice "Reading latest value for sensor $dev from $url"
 	if { [catch {open $url} fd] } {
@@ -371,7 +368,39 @@ proc ::latest { dev { lbl "" } } {
 	}
     }
 
-    return [::extract $data $lbl]
+    return $data
+}
+
+
+# Get latest value, implement a cache to avoid fetching values too
+# often.
+proc ::latest { dev { lbl "" } } {
+    global RPT
+
+    set root [string trimright $RPT(root) "/"]
+    set url ${root}/${dev}$RPT(extension)
+    set now [clock seconds]
+
+    set d [::uobj::find [namespace current] device \
+	       [list name == $dev]]
+    if { $d eq "" } {
+	set d [::uobj::new [namespace current] device]
+	upvar \#0 $d DEV
+	set DEV(name) $dev
+	set DEV(data) ""
+	set DEV(latest) 0
+    } else {
+	upvar \#0 $d DEV
+    }
+
+    if { $now - $DEV(latest) > [expr int($RPT(caching)*$RPT(refresh)*60)] } {
+	set DEV(latest) $now
+	set DEV(data) [::getdata $dev]
+    } else {
+	$RPT(log)::debug "Using cached value for sensor $dev at $url"
+    }
+
+    return [::extract $DEV(data) $lbl]
 }
 
 
@@ -408,7 +437,7 @@ proc ::update:context {} {
     foreach {xp dst} $RPT(matcher) {
 	set ids {}
 	set idx 0
-	while { [regexp -indices -start $idx {%\w+%} $xp range] > 0 } {
+	while { [regexp -indices -start $idx {%[\w_/.]+%} $xp range] > 0 } {
 	    foreach {start stop} $range break
 	    lappend ids [string range $xp [expr $start + 1] [expr $stop - 1]]
 	    set idx [expr $stop + 1]
@@ -465,7 +494,7 @@ proc ::update:pachube {} {
 proc ::update {} {
     global RPT
 
-
+    $RPT(log)::info "Getting data and updating targets"
     if { $RPT(feed) > 0 } {
 	update:pachube
     }
@@ -494,24 +523,27 @@ proc ::net:init {} {
 proc ::api:init {} {
     global RPT
 
-    set pachube(feed) \
-	[list \
-	     url $RPT(apiroot)/feeds/%feed%.json \
-	     headers [list X-PachubeApiKey $RPT(key)] \
-	    ]
-    set pachube(stream) \
-	[list \
-	     url $RPT(apiroot)/feeds/%feed%/datastreams/%id%.json \
-	     headers [list X-PachubeApiKey $RPT(key)] \
-	     ]
-    set pachube(update) \
-	[list \
-	     url $RPT(apiroot)/feeds/%feed%/datastreams/%id%.json \
-	     method put \
-	     body required \
-	     headers [list X-PachubeApiKey $RPT(key)] \
-	     ]
-    ::rest::create_interface pachube
+    if { $RPT(feed) > 0 } {
+	set pachube(feed) \
+	    [list \
+		 url $RPT(apiroot)/feeds/%feed%.json \
+		 headers [list X-PachubeApiKey $RPT(key)] \
+		]
+	set pachube(stream) \
+	    [list \
+		 url $RPT(apiroot)/feeds/%feed%/datastreams/%id%.json \
+		 headers [list X-PachubeApiKey $RPT(key)] \
+		]
+	set pachube(update) \
+	    [list \
+		 url $RPT(apiroot)/feeds/%feed%/datastreams/%id%.json \
+		 method put \
+		 body required \
+		 headers [list X-PachubeApiKey $RPT(key)] \
+		]
+	::rest::create_interface pachube
+    }
+
     set RPT(cx) [::cxapi::new -url $RPT(context) -timeout $RPT(timeout)]
 }
 
