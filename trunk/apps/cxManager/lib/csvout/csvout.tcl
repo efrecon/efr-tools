@@ -11,11 +11,6 @@
 
 # IMPLEMENTATION NOTES
 #
-# The module uses the main database and a key called global.databases
-# to know where to store objects. It simply picks up the latest host
-# present in the key (a list) when associating a (new) object to a
-# database.
-#
 # At initialisation, the module register a write trace on all the
 # objects that have been created within the model. Every time a write
 # occur, the trace will give the object a respit period (controlled by
@@ -24,32 +19,9 @@
 # operations within that (short!) time frame so as to try minimising
 # the number of versions in the database.
 #
-# Versions of objects are stored as a key formed by their UUID and the
-# timestamp of the version. This is a hash and content is linearise so
-# that it containts UUIDs instead of object identifiers.  Each object
-# is also controlled by a sorted set (named after the UUID only),
-# containing each timestamp weighted with the timestamp.  When looking
-# for an object, the module will use zrangebyscore around the searched
-# timestamp, benefiting from the range capabilities that are
-# implemented in the sorted set at the database level.  The time span
-# for searches is controlled by -span, which is in seconds and
-# defaults to 24h.
-#
-# Updates can be created in the future.  The mechanism is similar to
-# regular writes, as explained above, only that the package uses a
-# "when" hint that contains the time at which the update should occur.
-# There is no check on the timestamp contained in "when", so updates
-# in the past are also accepted.  Updates stored in the database do
-# not entirely describe the whole object at first.  To complement the
-# storage of updates in the future, the package will poll at regular
-# intervals (controlled by -replay, in seconds) for updates that might
-# be necessary to apply to existing objects in the context.  The
-# content of these updates is then applied to the proper objects when
-# time has come.  Same "when" hinting happens at that time, so that a
-# complete of the object is stored in the database.  Note that the
-# replay mechanism can be turned off by specifying a negative (or
-# zero) replay period.
-
+# A timestamp and a description of what fields have been changed is
+# automatically added to the CSV files in order to facilitate their
+# import.  Future or past updates are ignored.
 
 package require uobj
 package require event
@@ -75,10 +47,10 @@ namespace eval ::csvout {
 }
 
 
-# ::csvout::__dumpfield -- Convert value for REDIS storage
+# ::csvout::__dumpfield -- Convert value for CSV storage
 #
 #	Format a value, issuing from a field so that it can be stored
-#	in the REDIS database.  The procedure will replace object
+#	in the CSV database.  The procedure will replace object
 #	identifiers by their UUIDs and booleans by 0 or 1.
 #
 # Arguments:
@@ -86,7 +58,7 @@ namespace eval ::csvout {
 #	val	Value to convert
 #
 # Results:
-#	Return a string ready for insertion in REDIS.
+#	Return a string ready for insertion in a CSV file.
 #
 # Side Effects:
 #	None.
@@ -118,11 +90,11 @@ proc ::csvout::__dumpfield { f val } {
 
 
 
-# ::csvout::__field -- Format field value for insertion in REDIS
+# ::csvout::__field -- Format field value for insertion in CSV file
 #
-#	Convert the content of a field for insertion in REDIS.  This
-#	procedure understands properly multi-fields, i.e. arrays of
-#	values.  Conversion of single values is delegated to
+#	Convert the content of a field for insertion in a CSV file.
+#	This procedure understands properly multi-fields, i.e. arrays
+#	of values.  Conversion of single values is delegated to
 #	__dumpfield.
 #
 # Arguments:
@@ -130,7 +102,7 @@ proc ::csvout::__dumpfield { f val } {
 #	val	Value to convert
 #
 # Results:
-#	Return a string ready for insertion into REDIS
+#	Return a string ready for insertion into CSV file
 #
 # Side Effects:
 #	None.
@@ -146,6 +118,23 @@ proc ::csvout::__field { f val } {
     return $result
 }
 
+
+# ::csvout::__open -- Open CSV file to append data
+#
+#	Open (possibly creating) a CSV file so as to be able to append
+#	data to the file.  At creating, a header is automatically
+#	added to the CSV file as specified in RFC4180.
+#
+# Arguments:
+#	csvout	CSV context as created by new
+#	o	Identifier of object to open file for data output
+#
+# Results:
+#	Return a file descriptor ready for appending data, empty
+#	string on file/directory creation errors.
+#
+# Side Effects:
+#	None.
 proc ::csvout::__open { csvout o } {
     variable CSVOUT
     variable log
@@ -161,12 +150,15 @@ proc ::csvout::__open { csvout o } {
     set RESOLVER(uuid) $OBJ(uuid)
     set RESOLVER(class) [::uobj::type $o]
 
+    # Create directory for output, if it does not exist.
     set dir [::uobj::resolve $o $COUT(-dir) [array get RESOLVER]]
     if { [catch {file mkdir $dir} err] } {
 	${log}::error "Cannot create/access directory $dir: $err"
 	return ""
     }
 
+    # Open file for appending, testing its existence before opening so
+    # as to be able to automatically append a header at creation time.
     set fname [file join $dir \
 		   [::uobj::resolve $o $COUT(-fname) [array get RESOLVER]]]
     set header [expr ![file exists $fname]]
@@ -188,10 +180,24 @@ proc ::csvout::__open { csvout o } {
 	}
     }
 
+    # Return file descriptor, caller should close
     return $fd
 }
 
 
+# ::csvout::__quoted -- Handle quotation of field contents
+#
+#	Quote a value as specified in RFC4180.
+#
+# Arguments:
+#	csvout	CSV context as created by new
+#	val	Value to quote
+#
+# Results:
+#	Return quoted value.
+#
+# Side Effects:
+#	None.
 proc ::csvout::__quoted { csvout val } {
     variable CSVOUT
     variable log
@@ -216,20 +222,20 @@ proc ::csvout::__quoted { csvout val } {
 }
 
 
-# ::csvout::__flush -- Flush a version to database
+# ::csvout::__flush -- Flush a version to CSV file
 #
-#	Writes the current content of the object to the REDIS
-#	database, implicitely under the current time as the version.
+#	Writes the current content of the object to the CSV file
+#	implicitely under the current time as the version.
 #
 # Arguments:
-#	csvout	Database context created by <new>
+#	csvout	CSV context created by <new>
 #	o	Identfier of object.
 #
 # Results:
-#	None.
+#	Return the list of fields that were found in the update.
 #
 # Side Effects:
-#	None.
+#	Append textual representation of the update to the CSV file.
 proc ::csvout::__flush { csvout o } {
     variable CSVOUT
     variable log
@@ -239,24 +245,34 @@ proc ::csvout::__flush { csvout o } {
     }
     upvar \#0 $csvout COUT
 
-    # Allocate database to object if necessary
+    # Ignored scheduled writes, empty the output timer and the hints. 
+    if { [::uobj::keyword $o "when"] ne "" } {
+	::uobj::keyword $o csv/output ""
+	::uobj::keyword $o csv/hints ""
+	return {}
+    }
+
+    # Open file for output, creating if necessary
     set fd [__open $csvout $o]
 
     # Access the class directing the content of the object.
     set c [[$COUT(model) get schema] find [::uobj::type $o]]
 
     # For all the fields coming from all the classes that we inherit
-    # from, store the value in REDIS at UUID.now where now is the
-    # present time.  Remember that we have a timestamp for that UUID
-    # by adding now to the sorted set UUID, with the time as the
-    # score.  Using the time as the score will help us getting data
-    # out of the CSVOUT in a scalable way.
+    # from, store the value in the file.  Make sure to prepend current
+    # timestamp for the operation, and to append an hint over which
+    # fields were modified by the operation, even though we actually
+    # store the whole content of the object each time.
+    set hints {}
     if { $c ne "" && $fd ne "" } {
 	upvar \#0 $o OBJ
 	set now [clock seconds]
 
+	# Prepend timestamp
 	set values [list [__quoted $csvout \
 			      [clock format $now -format $COUT(-format)]]]
+	
+	# Continue with quoted content of all fields.
 	foreach s [$c inheritance on] {
 	    foreach f [$s get fields] {
 		set fname [$f get -name]
@@ -265,14 +281,18 @@ proc ::csvout::__flush { csvout o } {
 		}
 	    }
 	}
-	set hints {}
+	
+	# Append an hint describing which fields were modified.
 	foreach h [::uobj::keyword $o csv/hints] {
 	    lappend hints [string trimleft $h "-"]
 	}
 	lappend values [__quoted $csvout [join $hints $COUT(-cutter)]]
+
+	# Dump single line to CSV file
 	puts $fd [join $values $COUT(-separator)]
     }
     
+    # Close file, we will reopen next time if necessary.
     if { $fd ne "" } {
 	close $fd
     }
@@ -280,6 +300,8 @@ proc ::csvout::__flush { csvout o } {
     # Empty the output timer and the hints. 
     ::uobj::keyword $o csv/output ""
     ::uobj::keyword $o csv/hints ""
+
+    return $hints
 }
 
 
@@ -290,7 +312,7 @@ proc ::csvout::__flush { csvout o } {
 #	object to the database in no more than -flush milliseconds.
 #
 # Arguments:
-#	csvout	Database context, as created by <new>
+#	csvout	CSV context, as created by <new>
 #	varname	Name of variable being changed.
 #	idx	Index in array, (always relevant in our case)
 #	op	Operation on object (always write in our case)
@@ -299,7 +321,7 @@ proc ::csvout::__flush { csvout o } {
 #	None.
 #
 # Side Effects:
-#	Schedule a version dump of the object to the relevant REDIS csvout.
+#	Schedule a version dump of the object to the relevant CSV file.
 proc ::csvout::__write { csvout varname idx op } {
     variable CSVOUT
     variable log
@@ -330,7 +352,6 @@ proc ::csvout::__write { csvout varname idx op } {
 }
 
 
-
 # ::csvout::__trace -- Setup traces on object write
 #
 #       Arrange to have internal traces on write on an object (of the
@@ -338,7 +359,7 @@ proc ::csvout::__write { csvout varname idx op } {
 #       database automatically whenever the object is modified.
 #
 # Arguments:
-#	csvout	Database context, as created by <new>
+#	csvout	CSV context, as created by <new>
 #       o       Identifier of the object
 #
 # Results:
@@ -378,12 +399,12 @@ proc ::csvout::__trace { csvout o } {
 }
 
 
-# ::csvout::config -- Configure database context object.
+# ::csvout::config -- Configure CSV context object.
 #
 #	Configure or access values for a CSV output context object.
 #
 # Arguments:
-#	csvout	Database context, as created by <new>
+#	csvout	CSV context, as created by <new>
 #	args	List of dash-led options with values.
 #
 # Results:
@@ -391,8 +412,7 @@ proc ::csvout::__trace { csvout o } {
 #	given as an argument.
 #
 # Side Effects:
-#	Close connection to (old) databases when the main redis
-#	database changes.
+#	None.
 proc ::csvout::config { csvout args } {
     variable CSVOUT
     variable log
@@ -420,7 +440,6 @@ proc ::csvout::config { csvout args } {
 }
 
 
-
 # ::csvout::new -- Create new context for historical data storage
 #
 #	Create a new context for storage of object versions at within
@@ -431,7 +450,7 @@ proc ::csvout::config { csvout args } {
 #	procedure.  The options (in args) that are accepted are the
 #	following:
 #       -dir     Directory (%-enclosed variables are allowed as of diskutil)
-#       -flush   Time in milliseconds before actually attempting REDIS write
+#       -flush   Time in milliseconds before actually attempting file write
 #
 # Arguments:
 #	mdl	Identifier of a model
