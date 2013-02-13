@@ -344,9 +344,9 @@ proc ::minihttpd::__disconnect { port sock } {
 	    upvar \#0 $varname Client
 
 	    fileevent $sock readable ""
-	    catch "flush $sock"
+	    catch {flush $sock}
 	    unset Client
-	    ::close $sock
+	    catch {::close $sock}
 	    set idx [lsearch -exact $Server(clients) $sock]
 	    if { $idx >= 0 } {
 		set Server(clients) [lreplace $Server(clients) $idx $idx]
@@ -1048,6 +1048,34 @@ proc ::minihttpd::__web_socket { port sock } {
     return 0
 }
 
+proc ::minihttpd::__ws_callback { port sock type msg } {
+    variable HTTPD
+    variable log
+
+    set idx [lsearch $HTTPD(servers) $port]
+    if { $idx >= 0 } {
+	set varname "::minihttpd::Server_${port}"
+	upvar \#0 $varname Server
+	
+	set idx [lsearch $Server(clients) $sock]
+	if { $idx >= 0 } {
+	    set varname "::minihttpd::Client_${port}_${sock}"
+	    upvar \#0 $varname Client
+
+	    # Ugly but working eval...
+	    if { [catch {eval [concat $Client(live) [list $sock $type $msg]]} \
+		      res] } {
+		${log}::error "Error when executing WebSocket reception\
+                               handler: $res"
+	    }
+
+	    if { $type eq "close" } {
+		__disconnect $port $sock
+	    }
+	}
+    }
+}
+
 
 # ::minihttpd::__push -- Push answer back to client.
 #
@@ -1153,22 +1181,17 @@ proc ::minihttpd::__push { port sock } {
 		flush $sock
 
 		# Make the socket a websocket
-		::websocket::takeover $sock $Client(live) 1
+		::websocket::takeover \
+		    $sock [list [namespace current]::__ws_callback $port] 1
 
 		# Tell the websocket handler that we have a new
 		# incoming request. We mediate this through the
 		# "message" part, which in this case is composed of a
 		# list containing the URL and the query (itself as a
-		# list).
-		if { [catch {$Client(live) $sock request \
-				 [list $Client(url) $Client(query)]} \
-			  res] } {
-		    __push_error $port $sock 400 \
-			    "Error when executing WS connect handler: $res"
-		} else {
-		    __translog $port $sock WebSocket \
-			Forwarded connection to handler $Client(live)
-		}
+		# list).  Implementation is rather ugly since we call
+		# the hidden method in the websocket code!
+		::websocket::__push $sock request \
+		    [list $Client(url) $Client(query)]
 	    } elseif { $Client(response) != "" || $Client(handler) != "" } {
 		puts $sock "HTTP/1.0 200 Data follows"
 		puts $sock "Date: [__fmtdate [clock seconds]]"
