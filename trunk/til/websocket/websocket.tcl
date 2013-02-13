@@ -111,7 +111,7 @@ proc ::websocket::__disconnect { sock } {
     if { $Connection(liveness) ne "" } {
 	after cancel $Connection(liveness)
     }
-    __push $sock disconnect "Disconnecting from remote end"
+    __push $sock disconnect "Disconnected from remote end"
     catch {::close $sock}
     unset $varname
 }
@@ -1010,6 +1010,67 @@ proc ::websocket::open { url handler args } {
     }
 
     return $token
+}
+
+
+proc ::websocket::conninfo { sock what } {
+    variable WS
+    variable log
+
+    set varname [namespace current]::Connection_$sock
+    if { ! [::info exists $varname] } {
+        ${log}::warn "$sock is not a WebSocket connection anymore"
+        return -code error "$sock is not a WebSocket"
+    }
+    upvar \#0 $varname Connection
+    
+    switch -glob -nocase -- $what {
+        "peer*" {
+            return $Connection(peername)
+        }
+        "sockname" -
+        "name" {
+            return $Connection(sockname)
+        }
+        "close*" {
+            return $Connection(closed)
+        }
+        "client" {
+            return [string is false $Connection(server)]
+        }
+        "server" {
+            return [string is true $Connection(server)]
+        }
+        "type" {
+            return [string is true $Connection(server)]?"server":"client"
+        }
+        "handlers" {
+            return $Connection(handlers)
+        }
+        default {
+            return -code error "$what is not a known information piece for\
+                                a websocket"
+        }
+    }
+    return "";  # Never reached
+}
+
+
+proc ::websocket::find { { host * } { port * } } {
+    variable WS
+    variable log
+
+    set socks [list]
+    foreach varname [::info vars [namespace current]::Connection_*] {
+        upvar \#0 $varname Connection
+        foreach {ip hst prt} $Connection(peername) break
+        if { ([string match $host $ip] || [string match $host $hst]) \
+                 && [string match $port $prt] } {
+            lappend socks $Connection(sock)
+        }
+    }
+
+    return $socks
 }
 
 
