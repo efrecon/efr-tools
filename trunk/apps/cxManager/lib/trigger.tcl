@@ -137,7 +137,7 @@ proc ::trigger:deliver { t } {
 	    return 0
 	}
 	return 1
-    } elseif { $scheme eq "sock:" } {
+    } elseif { $scheme eq "sock:" || $scheme eq "ws:" } {
 	set sock [string range $url [expr {$colon+1}] end]
 	::websocket::send $sock text [::json:object $TRIGGER(-object)]
     }
@@ -355,6 +355,9 @@ proc ::trigger:destroy { t } {
 	trace remove variable ${o}($f) write [list ::trigger:callback $t]
     }
 
+    $CM(log)::info "Removed trigger $TRIGGER(uuid) for object $o,\
+                    pushing back ($TRIGGER(-method)) to $TRIGGER(-receiver)"
+
     ::uobj::delete $t
 }
 
@@ -388,7 +391,8 @@ proc ::trigger:new { o qry } {
     # How to send back value
     set colon [string first ":" $TRIGGER(-receiver)]
     if { $colon >= 0 } {
-	if { [string range $TRIGGER(-receiver) 0 $colon] eq "sock:" } {
+	set scheme [string tolower [string range $TRIGGER(-receiver) 0 $colon]]
+	if { $scheme eq "sock:" || $scheme eq "ws:" } {
 	    set TRIGGER(-method) WS
 	} else {
 	    set TRIGGER(-method) POST
@@ -403,6 +407,9 @@ proc ::trigger:new { o qry } {
 	return -code error "Malformed URL for trigger: $TRIGGER(-receiver)"
     }
     
+    $CM(log)::info "Creating trigger $TRIGGER(uuid) for object $o,\
+                    pushing back ($TRIGGER(-method)) to $TRIGGER(-receiver)"
+
     # Jitter
     set TRIGGER(-jitter) 100
     if { [dict keys $qry jitter] ne {} } {
