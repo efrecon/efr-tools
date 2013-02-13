@@ -41,6 +41,8 @@
 ##    # Change is triggered whenever the power changes. The event also
 ##      carries the current power %p, the previous value %d (old) and
 ##      the time %t.
+##    # Collect is triggered whenever power data has been collected,
+##      arguments are same as Change event.
 ##    # Energy is triggered for each (new) energy consumption log, i.e
 ##      every hour. The event also carries the energy in Wh %y and the
 ##      time %t.
@@ -482,6 +484,8 @@ proc ::plugwise::__check:power { p } {
 			::event::generate $p Change \
 			    [list %p $use %d "$old" %t $now]
 		    }
+		    ::event::generate $p Collect \
+			[list %p $use %d "$old" %t $now]
 		    ${log}::debug "Plug using ${use}W"
 		} elseif { [string match "error:*" $l] } {
 		    ${log}::error "Error when communicating with plugwise: $l"
