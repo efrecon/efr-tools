@@ -192,9 +192,10 @@ proc ::object:set { o c qry } {
 	upvar \#0 $o SRC
 	set o [$c new]
 	upvar \#0 $o OBJ
-	# Copy the UUID since this is the same object, later/earlier
-	# in time.
-	set OBJ(uuid) $SRC(uuid);
+	# Copy the UUID and reference since this is the same object,
+	# later/earlier in time.
+	set OBJ(uuid) $SRC(uuid)
+	set OBJ(name) $SRC(name)
 	# Hint at what time the set operations are occuring,
 	# this will be used by the db library.
 	::uobj::keyword $o when $when
