@@ -154,7 +154,9 @@ proc ::pair:init { fname pachkey } {
 	    set first [string index $line 0]
 	    if { [string first $first $CM(comments)] < 0 } {
 		if { [string trimleft $line] ne $line } {
-		    foreach {lft rgt} [split [string trim $line] "="] break
+		    set equal [string first "=" $line]
+		    set lft [string range $line 0 [expr {$equal-1}]]
+		    set rgt [string range $line [expr {$equal+1}] end]
 		    lappend PAIR(-translations) \
 			[string trim $lft] [string trim $rgt]
 		} else {
