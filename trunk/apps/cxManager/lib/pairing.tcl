@@ -1,12 +1,41 @@
 package require uri::urn
 
 
-proc ::pair:extract { str } {
+proc ::pair:extract { str { indices false } } {
     set ids {}
     set idx 0
-    while { [regexp -indices -start $idx {%\w+%} $str range] > 0 } {
+    while { [regexp -indices -start $idx {%[\w|]+%} $str range] > 0 } {
+	# Extract where the field specification starts and stops
 	foreach {start stop} $range break
-	lappend ids [string range $str [expr $start + 1] [expr $stop - 1]]
+
+	# Extract field name itself and see if there is an index
+	# specification in the field name, i.e. an integer following a
+	# pipe character.
+	set f [string range $str [expr $start + 1] [expr $stop - 1]]
+	set i [string last "|" $f]
+
+	# Depending on what was asked, either add the field name and
+	# its index, or just the field name to the <ids> list which
+	# will be returned.
+	if { $i >= 0 } {
+	    if { [string is false $indices] } {
+		lappend ids [string range $f 0 [expr {$i - 1}]]
+	    } else {
+		lappend ids \
+		    [string range $f 0 [expr {$i - 1}]] \
+		    [string range $f [expr {$i + 1}] end]
+	    }
+	} else {
+	    # No index specification for field, assume it is 0,
+	    # i.e. the latest from the cache.
+	    if { [string is false $indices] } {
+		lappend ids $f
+	    } else {
+		lappend ids $f 0
+	    }
+	}
+
+	# Advance to next specification
 	set idx [expr $stop + 1]
     }
 
@@ -20,32 +49,72 @@ proc ::pair:receive { o r translations } {
     upvar \#0 $o OBJ
     upvar \#0 $r REMOTE
 
+    # Automatically push latest (i.e. current) version of remote
+    # object into cache.
+    ::cache:push $r
+
+    # Remember what we will be logging about (which object we are
+    # talking about).
     set uuid "local object"
     if { [array names OBJ uuid] ne "" } {
 	append uuid " " $OBJ(uuid)
     }
 
-    set touched_fields {}
+    set touched_fields {};  # List of fields touched by translations.
+    # Now perform translations, i.e. compute what the destination
+    # fields in the incoming object identified by <o> will be, given
+    # current values of remote object in <r> and given the fields
+    # transformations described in <translations>.
     foreach {dst src} $translations {
+	# Arrange for a string mapping directive describing receiving
+	# fields in <o>
 	set dst_fields [pair:extract $dst]
 	set dst_mapper {}
 	foreach f $dst_fields {
 	    lappend dst_mapper %$f% ""
 	}
 	
-	set src_fields [pair:extract $src]
+	# Arrange for a string mapping directive for the values of the
+	# remote fields in the transformations.  Make sure that we
+	# take care of all cases, including accessing historical
+	# fields.  Remember where we would fail if caching is
+	# insufficient.
+	set src_fields [pair:extract $src true]
 	set src_mapper {}
-	foreach f $src_fields {
-	    if { [array names REMOTE -$f] ne "" } {
-		lappend src_mapper %$f% $REMOTE(-$f)
-	    }
-	    if { [array names REMOTE $f] ne "" } {
-		lappend src_mapper %$f% $REMOTE($f)
+	set skip ""
+	foreach {f i} $src_fields {
+	    if { $i == 0 } {
+		if { [array names REMOTE -$f] ne "" } {
+		    lappend src_mapper %$f% $REMOTE(-$f)
+		    lappend src_mapper %${f}|0% $REMOTE(-$f)
+		}
+		if { [array names REMOTE $f] ne "" } {
+		    lappend src_mapper %$f% $REMOTE($f)
+		    lappend src_mapper %${f}|0% $REMOTE($f)
+		}
+	    } elseif { [string is integer $i] && $i < [::cache:versions $r] } {
+		array set HIST [::cache:peek $r $i]
+		if { [array names HIST -$f] ne "" } {
+		    lappend src_mapper %${f}|${i}% $HIST(-$f)
+		}
+		if { [array names HIST $f] ne "" } {
+		    lappend src_mapper %${f}|${i}% $HIST($f)
+		}
+	    } else {
+		set skip ${f}|${i}
+		break
 	    }
 	}
 
-	if { [llength $dst_fields] == 1 \
-		 && [string trim [string map $dst_mapper $dst]] eq ""} {
+	# If we really have one destination field to receive the
+	# result of the computation, perform the string mapping
+	# replacement according to the map above and do the maths!
+	# Arrange for string copies to work if the expression fails.
+	if { $skip ne "" } {
+	    $CM(log)::notice "Bad historical index or insufficient number\
+                              of versions for '$skip'"
+	} elseif { [llength $dst_fields] == 1 \
+		       && [string trim [string map $dst_mapper $dst]] eq ""} {
 	    set df [lindex $dst_fields 0]
 	    $CM(log)::notice "Copying sub-content of remote object into\
                               $uuid: ${df}=${src}"
