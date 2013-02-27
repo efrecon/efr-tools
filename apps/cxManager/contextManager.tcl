@@ -12,6 +12,7 @@ set options {
     { pairing.arg "" "Path to pairing configuration file" }
     { redis.arg "localhost:6379" "Hostname and port of REDIS server, empty to disable" }
     { history.arg "%progdir%/history" "Directory for CSV output, empty to disable" }
+    { cache.integer "5" "Number of historical values to keep in internal memory cache, negative to disable" }
 }
 
 array set CM {
@@ -134,7 +135,7 @@ proc log:out {dt srv lvl str} {
     -depends [list event uuidhash oauth rest redis udp] \
     -load [list minihttpd websocket schema model db ssdp UPnP cxapi csvout] \
     -packages [list struct::tree http uuid] \
-    -sources [list json find trigger rest tree api pairing] \
+    -sources [list json find trigger rest tree api cache pairing] \
     -parsed ::init:fix \
     -loaded ::init:tls \
     -outlog ::log:out

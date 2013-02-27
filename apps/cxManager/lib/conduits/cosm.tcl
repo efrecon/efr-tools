@@ -262,6 +262,7 @@ proc ::cosm::pair:__insert { p data } {
     # Create an array <CURRENT> with the current content of the feed,
     # i.e. the latest known values from the datastreams in the feed.
     set c [::uobj::new [namespace current] cosm [::uobj::id $p]]
+    ::uobj::keyword $c cacheid $PAIR(uuid)
     upvar \#0 $c CURRENT
     foreach datastream [dict get $feedinfo datastreams] {
 	# Make sure we have a current_value, newly created
@@ -300,6 +301,7 @@ proc ::cosm::pair:__copy_once { p } {
 	    # Prepare a list of JSON streams updates
 	    set json ""
 	    set c [::uobj::new [namespace current] cosm [::uobj::id $p]]
+	    ::uobj::keyword $c cacheid $PAIR(uuid)
 	    upvar \#0 $c COSM
 	    ::pair:receive $c $PAIR(object) $PAIR(-translations)
 	    foreach k [array names COSM -*] {

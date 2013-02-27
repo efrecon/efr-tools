@@ -124,6 +124,7 @@ proc ::upnp::pair:__copy_once { p } {
 	    # the values from the UPnP device that are necessary for
 	    # this translation.
 	    set r [::uobj::new [namespace current] remote [::uobj::id $p]]
+	    ::uobj::keyword $r cacheid $PAIR(uuid)
 	    upvar \#0 $r REMOTE
 
 	    set REMOTE(id) $r

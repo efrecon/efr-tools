@@ -85,22 +85,6 @@ proc ::gcal::pair:sync { p } {
 }
 
 
-proc ::gcal::pair:__extract_fields { str } {
-    variable GCAL
-    variable log
-
-    set ids {}
-    set idx 0
-    while { [regexp -indices -start $idx {%\w+%} $str range] > 0 } {
-	foreach {start stop} $range break
-	lappend ids [string range $str [expr $start + 1] [expr $stop - 1]]
-	set idx [expr $stop + 1]
-    }
-
-    return $ids
-}
-
-
 proc ::gcal::pair:check { p } {
     variable GCAL
     variable log
@@ -116,7 +100,7 @@ proc ::gcal::pair:check { p } {
     foreach { lft rgt } $PAIR(-translations) {
 	set valid 1
 
-	foreach f [pair:__extract_fields $lft] {
+	foreach f [pair:extract $lft] {
 	    if { [lsearch $PAIR(fields:context) $f] < 0 } {
 		${log}::error "Field '$f' used in translation does\
                                not exist in context objcet\
@@ -124,7 +108,7 @@ proc ::gcal::pair:check { p } {
 		set valid 0
 	    }
 	}
-	foreach f [pair:__extract_fields $rgt] {
+	foreach f [pair:extract $rgt] {
 	    if { [lsearch $PAIR(fields:calendar) $f] < 0 } {
 		${log}::error "Field '$f' used in translation does\
                                not exist in calendar events"
@@ -248,39 +232,14 @@ proc ::gcal::pair:__copy_once { p } {
                        [::schema::to_rfc3339 $EVT(end) s s]\
                        (title: $EVT(title))"
 	if { $now >= $EVT(start) && $now < $EVT(end) } {
-	    foreach {dst src} $PAIR(-translations) {
-		set dst_fields [pair:__extract_fields $dst]
-		set dst_mapper {}
-		foreach f $dst_fields {
-		    lappend dst_mapper %$f% ""
-		}
-		
-		set src_fields [pair:__extract_fields $src]
-		set src_mapper {}
-		foreach f $src_fields {
-		    lappend src_mapper %$f% $EVT($f)
-		}
-		if { [llength $dst_fields] == 1 \
-			 && [string trim \
-				 [string map $dst_mapper $dst]] eq ""} {
-		    set df [lindex $dst_fields 0]
-		    if { [catch {expr [string map $src_mapper $src]} val]==0} {
-			set OBJ(-$df) $val
-		    } else {
-			set OBJ(-$df) [string map $src_mapper $src]
-		    }
-		    ${log}::notice "Copied sub-content of event $EVT(id) into\
-                                    object: ${df}=$OBJ(-$df)"
-		}
-	    }
-
+	    pair:receive $PAIR(object) $e $PAIR(-translations)
 	    set copied 1
 	    break
 	}
     }
     if { ! $copied } {
 	foreach {dst src} $PAIR(-translations) {
-	    set dst_fields [pair:__extract_fields $dst]
+	    set dst_fields [pair:extract $dst]
 	    set dst_mapper {}
 	    foreach f $dst_fields {
 		lappend dst_mapper %$f% ""

@@ -197,6 +197,10 @@ proc ::rcontext::__receive { p cx data } {
 
     set r [::uobj::new [namespace current] remote [::uobj::id $p]]
     upvar \#0 $r REMOTE
+    ::uobj::keyword $r cacheid $PAIR(uuid); # Use the UUID of the pair
+					    # as a unique cache ID for
+					    # the remote object, this
+					    # is as good as it is.
     array set REMOTE [::json:to_dict $data]
     ::pair:receive $PAIR(object) $r $PAIR(-translations)
     ::uobj::delete $r
