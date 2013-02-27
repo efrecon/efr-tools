@@ -699,12 +699,7 @@ the source fields. They have the following format:
 1*WSP%field-name%*WSP=*WSPmath-expr
 }}}
 
-Where field-name is the name of a “field” in the destination of the
-pair (for a local or remote context, it would be the name of a field
-within the object; for a cosm feed, it would be the id of a
-datastream). The mathematical expression uses field names surrounded
-by % signs, as for the expression in the triggers and within the
-source.
+Where field-name is the name of a “field” in the destination of the pair (for a local or remote context, it would be the name of a field within the object; for a cosm feed, it would be the id of a datastream). The mathematical expression uses field names surrounded by % signs, as for the expression in the triggers and within the source. In addition, it is also possible to access prior versions of field at the remote entity by adding a pipe character followed by an index to the name of the field. So, for example, if a remote entity had a field called {{{value}}}, specifying {{{%value%}}} in the mathematical expression would mean the last received version of the field {{{value}}}. Specifying {{{%value|1%}}} would mean the value for the field received before the last one. {{{%value|0%}}} is equivalent to simply specifying {{{%value%}}}. The number of versions available cached in memory for remote object is specified as a command-line parameter to the context manager. Consequently, mathematical expressions that would be impossible, for example, because not enough versions of the object are available yet will fail gracefully until all necessary conditions are met.
 
 For the special case of UPnP services, the fields will be the
 variables that are declared as part of the service. The implementation
