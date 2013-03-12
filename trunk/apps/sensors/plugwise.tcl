@@ -29,7 +29,9 @@
 ##    the plug, though in milliseconds; power is the instant power in
 ##    W as read from the plug and when changing "noticeably"; energy
 ##    will be the W.h for the last entire hour (when implemented);
-##    status is the state of the relay in the plug.
+##    status is the state of the relay in the plug.  Sampling can be
+##    sent back from the context manager if frequency needs to be
+##    adapted over time.
 ##
 ##################
 
@@ -38,14 +40,14 @@ package require Tcl
 set options {
     { logfile.arg "%APPDATA%/me3gas/%progname%.log" "Where to save log for every run" }
     { context.arg "http://localhost:8802/" "Root URL to context manager" }
-    { links.arg "" "List of plugise MAC matches to UUID and plug:field names" }
+    { links.arg "" "List of plugise MAC matches to UUID and plug:field names, either as list or filename (start with @)" }
     { serial.arg "/dev/ttyUSB0" "Serial device to use for comm. to plugwise" }
+    { picker.integer "3" "Number of seconds between connection establishments" }
 }
 
 array set PWISE {
     logfd       ""
     debug       0
-    open_spread 10000
 }
 
 
@@ -290,6 +292,9 @@ proc ::dev:__plug { p e args } {
 		::dev:__send $p "energy" [lindex $args 0] \
 		    "__when" [lindex $args 1]
 	    }
+	    Error {
+		::dev:reset $p
+	    }
 	}
     }
 }
@@ -313,7 +318,7 @@ proc ::dev:__plug { p e args } {
 #
 # Side Effects:
 #       None.
-proc ::dev:__context { p sock type msg } {
+proc ::dev:__context { p sock type { msg "" } } {
     global PWISE
 
     if { [::uobj::isa $p plug] } {
@@ -326,26 +331,34 @@ proc ::dev:__context { p sock type msg } {
 		# reflect the (new) state of the object.
 		set dta [::json:to_dict $msg]
 		foreach {plugField cxField} $PLUG(fields) {
-		    if { $plugField eq "status" \
-			     && [dict exists $dta $cxField] } {
-			set state [dict get $dta $cxField]
-			if { [string is true $state] \
-				 != [string is true \
-					 [$PLUG(plug) get -state]] } {
-			    $PLUG(plug) switch $state
+		    switch $plugField {
+			"status" {
+			    if { [dict exists $dta $cxField] } {
+				set state [dict get $dta $cxField]
+				if { [string is true $state] \
+					 != [string is true \
+						 [$PLUG(plug) get -state]] } {
+				    $PLUG(plug) switch $state
+				}
+			    }
+			}
+			"sampling" {
+			    if { [dict exists $dta $cxField] } {
+				set sampling [dict get $dta $cxField]
+				set frequency [expr {$sampling / 1000}]
+				if { $frequency \
+					 != [$PLUG(plug) config -frequency] } {
+				    $PLUG(plug) config -frequency $frequency
+				}
+			    }			    
 			}
 		    }
 		}
 	    }
 	    "close" {
-		# We should probably delete the plug object and (the
-		# underlying) plug object from the plugwise library,
-		# unless we want to automatically reopen (retry?) the
-		# connection to the context manager in some way.
-		$PWISE(log)::notice "Connection to context lost, removing\
-                                     plug $PLUG(mac) from memory"
-		$PLUG(plug) destroy
-		::uobj::delete $p
+		# Remember the socket is closed, we'll try picking it
+		# to reopen the connection in a while.
+		set PLUG(sock) ""
 	    }
 	    "connect" {
 		# Associate the socket identifier to our local plug
@@ -355,18 +368,56 @@ proc ::dev:__context { p sock type msg } {
 		set PLUG(sock) $sock
 		$PWISE(log)::info "Plugwise $PLUG(mac) connected to context\
                                    object $PLUG(uuid)"
-		# Send current state and sampling rate to context manager.
-		::dev:__plug $p Switch
-		set power [$PLUG(plug) get power]
-		if { $power ne "" } {
-		    ::dev:__send $p \
-			sampling [expr [$PLUG(plug) get -frequency]*1000] \
-			power [$PLUG(plug) get power]
-		} else {
-		    ::dev:__send $p \
-			sampling [expr [$PLUG(plug) get -frequency]*1000]
+		# No plugwise connection (yet) open it.
+		if { $PLUG(plug) eq "" } {
+		    $PWISE(log)::info "Establishing connection to plugwise\
+                                       $PLUG(mac)"
+		    ::dev:connect $p
+		}
+		if { [$PLUG(plug) get state] == "ERROR" } {
+		    $PWISE(log)::warn "Cannot initialise plugwise $PLUG(mac),\
+                                       will try again later."
+		    ::dev:reset $p;   # Reset, will retry later
+		} else { 
+		    # Send current state and sampling rate to context manager.
+		    ::dev:__plug $p Switch
+		    set power [$PLUG(plug) get power]
+		    if { $power ne "" } {
+			::dev:__send $p \
+			    sampling [expr [$PLUG(plug) get -frequency]*1000] \
+			    power [$PLUG(plug) get power]
+		    } else {
+			::dev:__send $p \
+			    sampling [expr [$PLUG(plug) get -frequency]*1000]
+		    }
 		}
 	    }
+	}
+    }
+}
+
+
+proc ::dev:connect { p } {
+    global PWISE
+
+    if { [::uobj::isa $p plug] } {
+	upvar \#0 $p PLUG
+
+	# Get rid of plugwise connection if we have one.
+	if { $PLUG(plug) ne "" } {
+	    $PLUG(plug) delete
+	    set PLUG(plug) ""
+	}
+
+	# (re)create connection to plugwise and arrange to know about
+	# all necessary events.
+	set plug [::plugwise::new $PLUG(mac) -dev $PWISE(serial)]
+	if { $plug ne "" } {
+	    set PLUG(plug) $plug
+	    ::event::bind $PLUG(plug) Switch "::dev:__plug $p %e"
+	    ::event::bind $PLUG(plug) Demand "::dev:__plug $p %e %p"
+	    ::event::bind $PLUG(plug) Energy "::dev:__plug $p %e %y %t"
+	    ::event::bind $PLUG(plug) Error "::dev:__plug $p %e %p"
 	}
     }
 }
@@ -423,6 +474,50 @@ proc ::net:wsroot {} {
 }
 
 
+proc ::dev:reset { p } {
+    global PWISE
+
+    if { [::uobj::isa $p plug] } {
+	upvar \#0 $p PLUG
+
+	# Close websocket if we have one.
+	if { $PLUG(sock) ne "" } {
+	    ::websocket::close $PLUG(sock)
+	    set PLUG(sock) ""
+	}
+
+	# Destroy connection to physical plugwise if we have one
+	if { $PLUG(plug) ne "" } {
+	    $PLUG(plug) destroy
+	    set PLUG(plug) ""
+	}
+    }
+}
+
+
+proc ::dev:pick {} {
+    global PWISE
+
+    # Pick among the list of known plugs one that would not have a
+    # websocket properly connected to the context manager yet
+    foreach p [::uobj::allof [namespace current] plug] {
+	upvar \#0 $p PLUG
+	
+	if { $PLUG(sock) eq "" } {
+	    # Open WS connection, this will connect to plugwise
+	    # automatically if necessary.
+	    $PWISE(log)::info "Opening WebSocket to $PLUG(ws) for $PLUG(mac)"
+	    ::websocket::open $PLUG(ws) [list ::dev:__context $p]
+	    break;  # Just ONE at a time!
+	}
+    }
+
+    # Sleep for a while and try picking again
+    set when [expr int($PWISE(picker)*1000)]
+    after $when ::dev:pick
+}
+
+
 # ::dev:init -- Initialise bridge
 #
 #       Create a duplex bridge between a locally available PlugWise
@@ -447,20 +542,17 @@ proc ::dev:init { mac uuid fields } {
     set p [::uobj::find [namespace current] plug \
 	       [list mac == [::plugwise::mac $mac]]]
     if { $p eq "" } {
-	set plug [::plugwise::new $mac -dev $PWISE(serial)]
 	set root [::net:wsroot]
 
-	if { $plug ne "" && $root ne "" && [$plug get state] ne "ERROR" } {
+	if { $root ne "" } {
 	    set p [::uobj::new [namespace current] plug]
 	    upvar \#0 $p PLUG
-	    set PLUG(plug) $plug
-	    ::event::bind $PLUG(plug) Switch "::dev:__plug $p %e"
-	    ::event::bind $PLUG(plug) Demand "::dev:__plug $p %e %p"
-	    ::event::bind $PLUG(plug) Energy "::dev:__plug $p %e %y %t"
-	    set PLUG(mac) [$plug get mac]
+	    set PLUG(plug) ""
+	    set PLUG(mac) [::plugwise::mac $mac]
 	    set PLUG(sock) ""
 	    set PLUG(uuid) $uuid
 	    set PLUG(fields) {}
+	    set PLUG(ws) ${root}/${uuid}/stream
 	    foreach spec $fields {
 		if { [string first ":" $spec] >= 0 } {
 		    foreach {plugField cxField} [split $spec ":"] break
@@ -469,17 +561,6 @@ proc ::dev:init { mac uuid fields } {
 		    lappend PLUG(fields) $spec $spec
 		}
 	    }
-
-	    # Open in a wee while, otherwise we might get raise
-	    # conditions inside the websocket library if opening
-	    # several times against the same host and port too
-	    # quickly.
-	    set when [expr int(rand()*$PWISE(open_spread))]
-	    $PWISE(log)::info "Opening WebSocket to ${root}/${uuid}/stream in\
-                               $when ms..."
-	    after $when [list ::websocket::open \
-			     ${root}/${uuid}/stream \
-			     [list ::dev:__context $p]]
 	}
     }
 
@@ -492,9 +573,21 @@ proc ::dev:init { mac uuid fields } {
 package require tls
 ::http::register https 443 [list ::tls::socket]
 
+# Read set of links from file (or get from the command line directly)
+set PWISE(links) [string trim $PWISE(links)]
+if { [string index $PWISE(links) 0] eq "@" } {
+    set fname [::diskutil::fname_resolv [string range $PWISE(links) 1 end]]
+    $PWISE(log)::info "Reading plugwise linking from $fname..."
+    set PWISE(links) [::diskutil::lread $fname 3 "Plugwise MAC mappings file"]
+}
+
 # Create device listeners
 foreach {mac uuid fields} $PWISE(links) {
     ::dev:init $mac $uuid $fields
 }
+
+# Start picking for plugs which are not yet connected to the context
+# manager yet, which will establish connection to the plugwise.
+after idle ::dev:pick
 
 vwait forever
