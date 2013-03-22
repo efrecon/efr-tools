@@ -10,7 +10,7 @@ By default, the context manager will automatically save all changes made to obje
 
 = Replaying =
 
-Replaying updates for one or several objects is made possible by the {{{replay}}} application, which is able to use both the regular web API and the streaming facilities based on the WebSocket implementation. The application is able to replay at a quicker pace and also to map from source (save) UUIDs to destination UUIDs if necessary.
+Replaying updates for one or several objects is made possible by the {{{replay}}} application, which is able to use both the regular web API and the streaming facilities based on the WebSockets implementation. The application is able to replay at a quicker pace and also to map from source (save) UUIDs to destination UUIDs if necessary.
 
 The application is able to use a "controller" object in the context manager, i.e. an object that will be able to describe the current state of the replaying operations, but also able to send back "commands" to the replay application.  The object should have the following fields:
 
