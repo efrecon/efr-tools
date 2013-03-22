@@ -223,6 +223,46 @@ proc ::cxapi::config { cx args } {
 }
 
 
+proc ::cxapi::wsroot { cx } {
+    variable API
+    variable log
+
+    if { ![::uobj::isa $cx context] } {
+	return -code error "$cx unkown or wrong type"
+    }
+    upvar \#0 $cx CXT
+
+    # Find the scheme and replace http by ws, to make this a viable
+    # websocket URL if necessary.
+    set root ""
+    set colon [string first ":" $CXT(root)]
+    set scheme [string range $CXT(root) 0 [expr {$colon-1}]]
+    switch $scheme {
+	"http" {
+	    set root "ws:[string range $CXT(root) [expr {$colon+1}] end]"
+	}
+	"https" {
+	    set root "wss:[string range $CXT(root) [expr {$colon+1}] end]"
+	}
+	"wss" -
+	"ws" {
+	    set root $CXT(root)
+	}
+    }
+
+    # Make sure to append context after the root if not already
+    # present.
+    if { $root ne "" } {
+	set root [string trimright $root "/"]
+	if { [string range $root end-6 end] ne "context" } {
+	    append root "/context"
+	}
+	return $root;  # We usually exit here, with a cool clean WS URL...
+    }
+    return ""
+}
+
+
 proc ::cxapi::__init {} {
     variable API
     variable log
@@ -296,7 +336,8 @@ proc ::cxapi::new { args } {
     
     ::uobj::inherit API CXT
     ::uobj::objectify $cx [list [list config configure] call context \
-			       [list pachube cosm] remote gcal UPnP trigger]
+			       [list pachube cosm] remote gcal UPnP trigger \
+			       wsroot]
 
     eval config $cx $args
 

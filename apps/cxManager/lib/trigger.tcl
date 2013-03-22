@@ -95,7 +95,18 @@ proc ::trigger:deliver { t } {
     set colon [string first ":" $url]
     set scheme [string tolower [string range $url 0 $colon]]
 
-    if { $scheme eq "http:" || $scheme eq "https:" } {
+    if { $TRIGGER(-method) eq "WS" } {
+	set sock [string range $url [expr {$colon+1}] end]
+	::websocket::send $sock text [::json:object $TRIGGER(-object)]
+    } elseif { $TRIGGER(-method) eq "CMD" } {
+	set cmd [string range $url [expr {$colon+1}] end]
+	# url contains the command to callback
+	if { [catch {eval $cmd} res] } {
+	    $CM(log)::warn "Could not execute internal command $cmd: $res"
+	} else {
+	    $CM(log)::debug "Executed internal command $cmd"
+	}
+    } elseif { $scheme eq "http:" || $scheme eq "https:" } {
 	array set URL [::uri::split $url]
 
 	# Add Basic authentication headers.
@@ -137,9 +148,6 @@ proc ::trigger:deliver { t } {
 	    return 0
 	}
 	return 1
-    } elseif { $scheme eq "sock:" || $scheme eq "ws:" } {
-	set sock [string range $url [expr {$colon+1}] end]
-	::websocket::send $sock text [::json:object $TRIGGER(-object)]
     }
 
     return 0
@@ -394,6 +402,8 @@ proc ::trigger:new { o qry } {
 	set scheme [string tolower [string range $TRIGGER(-receiver) 0 $colon]]
 	if { $scheme eq "sock:" || $scheme eq "ws:" } {
 	    set TRIGGER(-method) WS
+	} elseif { $scheme eq "proc:" || $scheme eq "cmd:" } {
+	    set TRIGGER(-method) CMD
 	} else {
 	    set TRIGGER(-method) POST
 	    if { [dict keys $qry method] ne {} } {
