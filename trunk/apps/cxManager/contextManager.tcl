@@ -26,6 +26,7 @@ array set CM {
     permanent   ""
     rest        {}
     pertain     1000
+    idgene      0
 }
 
 
@@ -190,6 +191,8 @@ proc ::net:httpd { port { pki "" } } {
     ::minihttpd::handler $srv /context/destroy ::rest:destroy "application/json"
     ::minihttpd::handler $srv /context/destroy/ ::rest:destroy \
 	"application/json"
+    ::minihttpd::handler $srv /context/add ::rest:add "application/json"
+    ::minihttpd::handler $srv /context/add/ ::rest:add "application/json"
     ::minihttpd::handler $srv /find ::rest:find "application/json"
     ::minihttpd::handler $srv /find/ ::rest:find "application/json"
     ::minihttpd::handler $srv /locate ::rest:locate "application/json"

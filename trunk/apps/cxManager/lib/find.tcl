@@ -92,6 +92,7 @@ proc ::find:topmosts { cls rel } {
     return $topmosts
 }
 
+
 # ::find:class -- Find after specific classes
 #
 #       Find among the known classes (or a subset of these) after

@@ -41,6 +41,7 @@ proc ::model::__reference { f name ns } {
 	set REF(-class) $cls
 	set REF(-object) [$cls new $ns]
 	set REF(-name) $name
+	::uobj::objectify $r [list get]
     }
     
     return $r
@@ -114,6 +115,67 @@ proc ::model::__specialise { r class ns } {
 }
 
 
+proc ::model::__set { r descr { ns "" } } {
+    variable MODEL
+    variable log
+
+    if { ![::uobj::isa $r reference]} {
+	return -code error "$r unknown or wrong type"
+    }
+    set class [$r get -class]
+    set o [$r get -object]
+    if { $o eq "" } {
+	${log}::error "Reference $r does not point to existing object!"
+	return
+    }
+    upvar \#0 $o OBJ
+
+    foreach {k v} $descr {
+	set f [$class field $k]
+	if { $f ne "" } {
+	    if { [$f get builtin] || [$f get constraint] ne "" } {
+		set OBJ(-$k) $v;  # No extra work, leave type checking
+				  # to the verification mechanisms in
+				  # schema.
+	    } else {
+		set fclass [$f get class]
+		if { [$f get -multi] } {
+		    set OBJ(-$k) {}
+		    foreach val $v {
+			# Get to reference and get to object from there
+			set fr [__reference $f $val $ns]
+			upvar \#0 $fr FREF
+			
+			set o [__specialise $fr $fclass $ns]
+			if { $o ne "" } {
+			    lappend OBJ(-$k) $o
+			} else {
+			    return -code error \
+				"Cannot specialise $FREF(-name) to\
+		                 a [$fclass get -name]"
+			}
+		    }
+		} else {
+		    # Get to reference and get to object from there
+		    set fr [__reference $f $v $ns]
+		    upvar \#0 $fr FREF
+		    
+		    set o [__specialise $fr $fclass $ns]
+		    if { $o ne "" } {
+			set OBJ(-$k) $o
+		    } else {
+			return -code error \
+			    "Cannot specialise $FREF(-name) to a\
+		             [$fclass get -name]"
+		    }
+		}
+	    }
+	} else {
+	    return -code error "Field $k is unknown to class $type"
+	}
+    }
+}
+
 proc ::model::__analyse { m lst url refstore ns } {
     variable MODEL
     variable log
@@ -125,79 +187,15 @@ proc ::model::__analyse { m lst url refstore ns } {
 
     foreach {type instance descr} $lst {
 	set class [$MDL(schema) find $type]
+	set r ""
 	if { $class eq "" } {
 	    ${log}::error "$type is not a class known from schema!"
-	} elseif [::uobj::isa $class class] {
-	    # Create a reference to the object or get to the one that
-	    # already exist for this name.
-	    set r [::uobj::find [namespace current] reference \
-		       [list -name == $instance]]
-	    if { $r eq "" } {
-		# Create an instance of the class
-		set o [$class new $ns]
-		upvar \#0 $o OBJ
-		# Create a reference to the object and remember it
-		set r [::uobj::new [namespace current] reference]
-		upvar \#0 $r REF
-		set REF(-name) $instance
-		set REF(-class) $class
-		set REF(-object) $o
-	    } else {
-		upvar \#0 $r REF
-		set o [__specialise $r $class $ns]
-		if { $o eq "" } {
-		    return -code error "$REF(-name) previously declared as\
-		                        a [$REF(-class) get -name] which\
-		                        is not a class inherited by $type"
-		}
-		upvar \#0 $o OBJ
-	    }
-
-	    foreach {k v} $descr {
-		set f [$class field $k]
-		if { $f ne "" } {
-		    if { [$f get builtin] || [$f get constraint] ne "" } {
-		        set OBJ(-$k) $v;  # No extra work, leave type
-		                          # checking to the
-		                          # verification mechanisms in
-		                          # schema.
-		    } else {
-		        set fclass [$f get class]
-		        if { [$f get -multi] } {
-		            set OBJ(-$k) {}
-		            foreach val $v {
-		                # Get to reference and get to object from there
-		                set fr [__reference $f $val $ns]
-		                upvar \#0 $fr FREF
-		                
-		                set o [__specialise $fr $fclass $ns]
-		                if { $o ne "" } {
-		                    lappend OBJ(-$k) $o
-		                } else {
-		                    return -code error \
-		                        "Cannot specialise $FREF(-name) to\
-		                             a [$fclass get -name]"
-		                }
-		            }
-		        } else {
-		            # Get to reference and get to object from there
-		            set fr [__reference $f $v $ns]
-		            upvar \#0 $fr FREF
-		            
-		            set o [__specialise $fr $fclass $ns]
-		            if { $o ne "" } {
-		                set OBJ(-$k) $o
-		            } else {
-		                return -code error \
-		                    "Cannot specialise $FREF(-name) to a\
-		                         [$fclass get -name]"
-		            }
-		        }
-		    }
-		} else {
-		    return -code error "Field $k is unknown to class $type"
-		}
-	    }
+	} else {
+	    set r [__add $m $class $instance $ns]
+	}
+	if { $r ne "" } {
+	    set o [$r get -object]
+	    __set $r $descr $ns
 	} else {
 	    return -code error "Cannot instantiate constraints at top level"
 	}
@@ -407,29 +405,120 @@ proc ::model::find { m uuid } {
 }
 
 
-proc ::model::get { m what } {
+proc ::model::get { o what } {
+    variable MODEL
+    variable log
+
+    set type [::uobj::type $o]
+    switch $type {
+	model {
+	    upvar \#0 $o MDL
+	    switch -glob -nocase -- $what {
+		objects -
+		schema {
+		    return $MDL($what)
+		}
+		-* {
+		    return [config $o $what]
+		}
+		default {
+		    return -code error "$what cannot be got from a $type"
+		}
+	    }
+	}
+	reference {
+	    upvar \#0 $o REF
+	    switch -glob -nocase -- $what {
+		upvar \#0 $r REF
+		-* {
+		    if { [array names REF $what] ne "" } {
+			return $REF($what)
+		    } else {
+			return ""
+		    }
+		}
+		default {
+		    return -code error "$what cannot be got from a $type"
+		}
+	    }
+	}
+    }
+
+    return ""; #Never reached.
+}
+
+
+proc ::model::add { m cls {refstore ""} {ref ""} {ns ""}} {
+    variable MODEL
+    variable log
+
+    # Add object to model, giving it a reference
+    set o ""
+    set r [__add $m $cls $ref $ns]
+    
+    # Save reference in refstore, if relevant and return created
+    # object.  Dump the reference object as this is only transient.
+    if { $r ne "" } {
+	upvar \#0 $r REF
+	set o $REF(-object)
+	if { [info exists $o] } {
+	    upvar \#0 $o OBJ
+	    set OBJ(uuid) \
+		[::uuidhash::uuid "[$REF(-class) get uuid]/$REF(-name)"]
+	    if { $refstore ne "" } {
+		set OBJ($refstore) $REF(-name)
+	    }
+	}
+	::uobj::delete $r
+    }
+    return $o
+}
+
+
+proc ::model::__add { m cls { ref "" } { ns "" } } {
     variable MODEL
     variable log
     
     if {![::uobj::isa $m model] } {
 	return -code error "$m unknown or wrong type"
     }
+    if {![::uobj::isa $cls class]} {
+	return -code error "$cls unknown or wrong type"
+    }
     upvar \#0 $m MDL
+    
+    # Generate a reference if we don't provide one.
+    if { $ref eq "" } {
+	set ref "a"
+	append ref [$cls get -name]
+	append ref [clock clicks -milliseconds]
+    }
 
-    switch -glob -nocase -- $what {
-	objects -
-	schema {
-	    return $MDL($what)
-	}
-	-* {
-	    return [config $m $what]
-	}
-	default {
-	    return -code error "$what cannot be got from a model"
+    # Create a reference to the object or get to the one that
+    # already exist for this name.
+    set r [::uobj::find [namespace current] reference \
+	       [list -name == $ref]]
+    if { $r eq "" } {
+	# Create an instance of the class
+	set o [$cls new $ns]
+	# Create a reference to the object and remember it
+	set r [::uobj::new [namespace current] reference]
+	upvar \#0 $r REF
+	set REF(-name) $ref
+	set REF(-class) $cls
+	set REF(-object) $o
+	::uobj::objectify $r [list get]
+    } else {
+	upvar \#0 $r REF
+	set o [__specialise $r $cls $ns]
+	if { $o eq "" } {
+	    return -code error "$REF(-name) previously declared as\
+		                a [$REF(-class) get -name] which\
+		                is not a class inherited by [$cls get -name]"
 	}
     }
 
-    return ""; #Never reached.
+    return $r
 }
 
 
@@ -509,7 +598,7 @@ proc ::model::new { schema args } {
     set MDL(objects) {};     # List of objects in model
     
     ::uobj::inherit MODEL MDL
-    ::uobj::objectify $m [list [list config configure] create dump get find]
+    ::uobj::objectify $m [list [list config configure] add create dump get find]
     eval config $m $args
     return $m
 }

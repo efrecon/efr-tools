@@ -807,6 +807,36 @@ proc ::rest:topmost { prt sock url qry } {
 }
 
 
+proc ::rest:add { prt sock url qry } {
+    global CM
+
+    # We must have a type, i.e. a class for the object to be created
+    if { [dict keys $qry type] eq {} } {
+	return "\[\]"
+    }
+
+    # Find the class of the object
+    set sha [$CM(cx) get schema]
+    set cls [lindex [find:class [dict get $qry type]] 0]
+    if { $cls eq "" } {
+	return "\[\]"
+    }
+    if { [dict keys $qry reference] eq {} } {
+	set ref "a"
+	append ref [$cls get -name]
+	append ref [incr CM(idgene)]
+    } else {
+	set ref [dict get $qry reference]
+    }
+
+    # Add object to context and return UUID
+    set o [$CM(cx) add $cls name]
+
+    return [::json:context [list $o]]
+    
+}
+
+
 # ::rest:find -- Find within context
 #
 #       Finds objects matching which class is a sub-class of a given
