@@ -452,6 +452,11 @@ proc ::model::add { m cls {refstore ""} {ref ""} {ns ""}} {
     variable MODEL
     variable log
 
+    if {![::uobj::isa $m model] } {
+	return -code error "$m unknown or wrong type"
+    }
+    upvar \#0 $m MDL
+
     # Add object to model, giving it a reference
     set o ""
     set r [__add $m $cls $ref $ns]
@@ -468,6 +473,7 @@ proc ::model::add { m cls {refstore ""} {ref ""} {ns ""}} {
 	    if { $refstore ne "" } {
 		set OBJ($refstore) $REF(-name)
 	    }
+	    lappend MDL(objects) $o
 	}
 	::uobj::delete $r
     }
