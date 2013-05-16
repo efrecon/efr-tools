@@ -821,16 +821,14 @@ proc ::rest:add { prt sock url qry } {
     if { $cls eq "" } {
 	return "\[\]"
     }
-    if { [dict keys $qry reference] eq {} } {
-	set ref "a"
-	append ref [$cls get -name]
-	append ref [incr CM(idgene)]
-    } else {
+    if { [dict keys $qry reference] ne {} } {
 	set ref [dict get $qry reference]
+    } else {
+	set ref ""
     }
 
     # Add object to context and return UUID
-    set o [$CM(cx) add $cls name]
+    set o [$CM(cx) add $cls name $ref]
 
     return [::json:context [list $o]]
     
