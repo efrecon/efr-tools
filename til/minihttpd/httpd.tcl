@@ -250,7 +250,7 @@ proc ::minihttpd::new {root port args} {
     set Server(listen) $sock
     set Server(selfvalidation_urls) {}
     set Server(handlers) {};     # External handlers for AJAX comm.
-    set Server(live) {};         # Web Sockets handlers.
+    set Server(live) "";         # WebSocket server state
     set Server(protocol) $proto
     set Server(socket_cmd) $socket_cmd
     foreach opt [array names HTTPD "-*"] {
@@ -981,98 +981,17 @@ proc ::minihttpd::__handler_list { port } {
 }
 
 
-
-proc ::minihttpd::__web_socket { port sock } {
+proc ::minihttpd::__ws_callback { port cb sock type msg } {
     variable HTTPD
     variable log
 
-    set idx [lsearch $HTTPD(servers) $port]
-    if { $idx >= 0 } {
-	set varname "::minihttpd::Server_${port}"
-	upvar \#0 $varname Server
-	
-	set idx [lsearch $Server(clients) $sock]
-	if { $idx >= 0 } {
-	    set varname "::minihttpd::Client_${port}_${sock}"
-	    upvar \#0 $varname Client
-
-	    set Client(live) "";  # Marker, will be set to handler if
-				  # we have a working WS to respond.
-
-	    # Are we upgrading the connection to a web socket?
-	    if { [array names Client "mime,connection"] != "" \
-		 && [string equal -nocase \
-			 $Client(mime,connection) "UPGRADE"] } {
-		if { [array names Client "mime,upgrade"] != "" \
-			 && [string equal -nocase \
-				 $Client(mime,upgrade) "WEBSOCKET"] } {
-		    # Compute security handshake
-		    set sec $Client(mime,sec-websocket-key)$HTTPD(ws_magic)
-		    set accept [base64::encode [sha1::sha1 -bin $sec]]
-		    
-		    # Extract application protocols looked for
-		    set protos {}
-		    if { [array names Client "mime,sec-websocket-protocol"] \
-			     != "" } {
-			set protos \
-			    [split $Client(mime,sec-websocket-protocol) ","]
-		    }
-		    
-		    # Search amongst existing WS handlers for one that
-		    # responds to that URL and implement one of the
-		    # protocols.
-		    foreach { ptn cb proto } $Server(live) {
-			set idx [lsearch -glob -nocase $protos $proto]
-			if { [string match -nocase $ptn $Client(url)] \
-				 && ( $protos == "" || $idx >= 0 ) } {
-			    # Found it! Mark in the client map using
-			    # the "live" index.
-			    set Client(ws_protocol) ""
-			    if { $idx >= 0 } {
-				set Client(ws_protocol) [lindex $protos $idx]
-			    }
-			    set Client(live) $cb
-			    set Client(ws_accept) $accept
-			    break
-			}
-		    }
-		}
-	    }
-	} else {
-	    ${log}::warn "$sock is not a recognised client of $port"
-	}
-    } else {
-	${log}::warn "Not listening for HTTP connections on $port!"
+    # Ugly but working eval...
+    if { [catch {eval [concat $cb [list $sock $type $msg]]} res] } {
+	${log}::error "Error when executing WebSocket reception\
+                       handler: $res"
     }
-
-    return 0
-}
-
-proc ::minihttpd::__ws_callback { port sock type msg } {
-    variable HTTPD
-    variable log
-
-    set idx [lsearch $HTTPD(servers) $port]
-    if { $idx >= 0 } {
-	set varname "::minihttpd::Server_${port}"
-	upvar \#0 $varname Server
-	
-	set idx [lsearch $Server(clients) $sock]
-	if { $idx >= 0 } {
-	    set varname "::minihttpd::Client_${port}_${sock}"
-	    upvar \#0 $varname Client
-
-	    # Ugly but working eval...
-	    if { [catch {eval [concat $Client(live) [list $sock $type $msg]]} \
-		      res] } {
-		${log}::error "Error when executing WebSocket reception\
-                               handler: $res"
-	    }
-
-	    if { $type eq "close" } {
-		__disconnect $port $sock
-	    }
-	}
+    if { $type eq "close" } {
+	__disconnect $port $sock
     }
 }
 
@@ -1144,9 +1063,11 @@ proc ::minihttpd::__push { port sock } {
 	    }
 
 	    # Convert the socket to a web socket if appropriate.
-	    __web_socket $port $sock
+	    set Client(live) [::websocket::test $Server(listen) $sock \
+				  $Client(url) [headers $port $sock] \
+				  $Client(query)]
 	    
-	    if { $Client(handler) == "" && $Client(live) == "" } {
+	    if { $Client(handler) == "" && !$Client(live) } {
 		set mypath ""
 		set myurl [fullurl $port $Client(url) mypath]
 	    } else {
@@ -1154,13 +1075,13 @@ proc ::minihttpd::__push { port sock } {
 	    }
 
 	    if { $Server(root) != "" && $Client(handler) == "" \
-		     && $Client(live) == "" && [file isdirectory $mypath] } {
+		     && !$Client(live) && [file isdirectory $mypath] } {
 		dirlist::dirlist $port $sock $mypath \
 		    [__URLtoString $Client(url)]
 	    }
 
 	    if { $Server(root) == "" \
-		     && $Client(live) == "" && $Client(handler) == "" } {
+		     && !$Client(live) && $Client(handler) == "" } {
 		set Client(response) [__handler_list $port]
 	    }
 
@@ -1169,29 +1090,8 @@ proc ::minihttpd::__push { port sock } {
 		return
 	    }
 
-	    if { $Client(live) != "" } {
-		puts $sock "HTTP/1.1 101 Switching Protocols"
-		puts $sock "Upgrade: websocket"
-		puts $sock "Connection: Upgrade"
-		puts $sock "Sec-WebSocket-Accept: $Client(ws_accept)"
-		if { $Client(ws_protocol) != "" } {
-		    puts $sock "Sec-WebSocket-Protocol: $Client(ws_protocol)"
-		}
-		puts $sock ""
-		flush $sock
-
-		# Make the socket a websocket
-		::websocket::takeover \
-		    $sock [list [namespace current]::__ws_callback $port] 1
-
-		# Tell the websocket handler that we have a new
-		# incoming request. We mediate this through the
-		# "message" part, which in this case is composed of a
-		# list containing the URL and the query (itself as a
-		# list).  Implementation is rather ugly since we call
-		# the hidden method in the websocket code!
-		::websocket::__push $sock request \
-		    [list $Client(url) $Client(query)]
+	    if { $Client(live)  } {
+		::websocket::upgrade $sock
 	    } elseif { $Client(response) != "" || $Client(handler) != "" } {
 		puts $sock "HTTP/1.0 200 Data follows"
 		puts $sock "Date: [__fmtdate [clock seconds]]"
@@ -1412,8 +1312,15 @@ proc ::minihttpd::live { port path cb { proto "*" } } {
     set varname "::minihttpd::Server_${port}"
     upvar \#0 $varname Server
 
-    lappend Server(live) $path $cb $proto
+    if { $Server(live) eq "" } {
+	set Server(live) [::websocket::server $Server(listen)]
+    }
+    ::websocket::live $Server(listen) \
+	$path \
+	[list [namespace current]::__ws_callback $port $cb] \
+	$proto
 }
+
 
 
 # ::minihttpd::defaults -- Set/Get defaults for all new connections
@@ -1646,8 +1553,11 @@ proc ::minihttpd::__fmtdate {clicks} {
 proc ::minihttpd::__translog { port sock reason args } {
     variable HTTPD
 
-    set logstr "\[[clock format [clock seconds] -format $HTTPD(dateformat)]\]"
-    if { [catch {fconfigure $sock -peername} sockinfo] == 0 } {
+    set logstr "[clock format [clock seconds] -format $HTTPD(dateformat)]"
+    # Do not find out about the remote peer since this might imply DNS
+    # timeouts as Tcl seems to be doing some reverse DNS to try
+    # finding out the name of the IP address.
+    if { 0 && [catch {fconfigure $sock -peername} sockinfo] == 0 } {
 	append logstr " \[[lindex $sockinfo 1]:[lindex $sockinfo 2]\]"
     }
     append logstr " \[$reason\] "
