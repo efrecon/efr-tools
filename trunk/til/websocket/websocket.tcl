@@ -87,7 +87,7 @@ proc ::websocket::loglevel { { loglvl "" } } {
 }
 
 
-# ::websocket::__disconnect -- Disconnect from remote end
+# ::websocket::Disconnect -- Disconnect from remote end
 #
 #       Disconnects entirely from remote end, providing an event in
 #       the handler associated to the socket.  This event is of type
@@ -102,7 +102,7 @@ proc ::websocket::loglevel { { loglvl "" } } {
 #
 # Side Effects:
 #       None.
-proc ::websocket::__disconnect { sock } {
+proc ::websocket::Disconnect { sock } {
     variable WS
 
     set varname [namespace current]::Connection_$sock
@@ -111,7 +111,7 @@ proc ::websocket::__disconnect { sock } {
     if { $Connection(liveness) ne "" } {
 	after cancel $Connection(liveness)
     }
-    __push $sock disconnect "Disconnected from remote end"
+    Push $sock disconnect "Disconnected from remote end"
     catch {::close $sock}
     unset $varname
 }
@@ -153,7 +153,7 @@ proc ::websocket::close { sock { code 1000 } { reason "" } } {
     if { $code == "" || ![string is integer $code] } {
 	send $sock 8
 	${log}::info "Closing web socket"
-	__push $sock close {}
+	Push $sock close {}
     } else {
 	if { $reason eq "" } {
 	    set reason [string map \
@@ -174,14 +174,14 @@ proc ::websocket::close { sock { code 1000 } { reason "" } } {
 	set msg [string range $msg 0 124];  # Cut answer to make sure it fits!
 	send $sock 8 $msg
 	${log}::info "Closing web socket: $code ($reason)"
-	__push $sock close [list $code $reason]
+	Push $sock close [list $code $reason]
     }
     
-    __disconnect $sock
+    Disconnect $sock
 }
 
 
-# ::websocket::__push -- Push event or data to handler
+# ::websocket::Push -- Push event or data to handler
 #
 #       Every WebSocket is associated to a handler that will be
 #       notified upon reception of data, but also upon important
@@ -207,7 +207,7 @@ proc ::websocket::close { sock { code 1000 } { reason "" } } {
 #
 # Side Effects:
 #       None.
-proc ::websocket::__push { sock type msg { handler "" } } {
+proc ::websocket::Push { sock type msg { handler "" } } {
     variable WS
     variable log
 
@@ -231,7 +231,7 @@ proc ::websocket::__push { sock type msg { handler "" } } {
 }
 
 
-# ::websocket::__ping -- Send a ping
+# ::websocket::Ping -- Send a ping
 #
 #       Sends a ping at regular intervals to keep the connection alive
 #       and prevent equipment to close it due to inactivity.
@@ -244,7 +244,7 @@ proc ::websocket::__push { sock type msg { handler "" } } {
 #
 # Side Effects:
 #       None.
-proc ::websocket::__ping { sock } {
+proc ::websocket::Ping { sock } {
     variable WS
     variable log
 
@@ -257,7 +257,7 @@ proc ::websocket::__ping { sock } {
 
     # Reschedule at once to get around any possible problem with ping
     # sending.
-    __liveness $sock
+    Liveness $sock
 
     # Now send a ping, which will trigger a pong from the
     # (well-behaved) client.
@@ -266,7 +266,7 @@ proc ::websocket::__ping { sock } {
 }
 
 
-# ::websocket::__liveness -- Keep connections alive
+# ::websocket::Liveness -- Keep connections alive
 #
 #       Keep connections alive (from the server side by construction),
 #       as suggested by the specification.  This procedure arranges to
@@ -282,7 +282,7 @@ proc ::websocket::__ping { sock } {
 #
 # Side Effects:
 #       None.
-proc ::websocket::__liveness { sock } {
+proc ::websocket::Liveness { sock } {
     variable WS
     variable log
 
@@ -295,7 +295,7 @@ proc ::websocket::__liveness { sock } {
     }
     set when [expr {$Connection(-keepalive)*1000}]
     if { $when > 0 } {
-	set Connection(liveness) [after $when [namespace current]::__ping $sock]
+	set Connection(liveness) [after $when [namespace current]::Ping $sock]
     } else {
 	set Connection(liveness) ""
     }
@@ -303,7 +303,7 @@ proc ::websocket::__liveness { sock } {
 }
 
 
-proc ::websocket::__type { opcode } {
+proc ::websocket::Type { opcode } {
     variable WS
     variable log
 
@@ -315,6 +315,237 @@ proc ::websocket::__type { opcode } {
     }
 
     return $type
+}
+
+
+# ::websocket::test -- Test incoming client connections for WebSocket
+#
+#       This procedure will test if the connection from an incoming
+#       client is the opening of a WebSocket stream.  The socket is
+#       not upgraded at once, instead a (temporary) context for the
+#       incoming connection is created.  This allows server code to
+#       perform a number of actions, if necessary before the WebSocket
+#       stream connection goes live.  The test is made by analysing
+#       the content of the headers.
+#
+# Arguments:
+#	srvSock	Socket to WebSocket compliant HTTP server
+#	cliSock	Socket to incoming connected client.
+#	path	Path requested by client at server
+#	hdrs	Dictionary list of the HTTP headers.
+#	qry	Dictionary list of the HTTP query (if applicable).
+#
+# Results:
+#       1 if this is an incoming WebSocket upgrade request, 0
+#       otherwise.
+#
+# Side Effects:
+#       None.
+proc ::websocket::test { srvSock cliSock path { hdrs {} } { qry {} } } {
+    variable WS
+    variable log
+
+    if { [llength $hdrs] <= 0 } {
+	return 0
+    }
+
+    set varname [namespace current]::Server_$srvSock
+    if { ! [info exists $varname] } {
+	${log}::warn "$srvSock is not a WebSocket server anymore"
+	return -code error "$srvSock is not a WebSocket"
+    }
+    upvar \#0 $varname Server
+
+    # Detect presence of connection and upgrade HTTP headers, together
+    # with their proper values.
+    set upgrading 0
+    set websocket 0
+    foreach {k v} $hdrs {
+	if { [string equal -nocase $k "connection"] && \
+		 [string equal -nocase $v "upgrade"] } {
+	    set upgrading 1
+	}
+	if { [string equal -nocase $k "upgrade"] && \
+		 [string equal -nocase $v "websocket"] } {
+	    set websocket 1
+	}
+    }
+    
+    # Fail early when not upgrading to a websocket.
+    if { !$upgrading || !$websocket } {
+	return 0
+    }
+
+    # If headers point towards a possible websocket...
+    set key ""
+    set protos {}
+    foreach {k v} $hdrs {
+	if { [string equal -nocase $k "sec-websocket-key"] } {
+	    set key $v
+	}
+	if { [string equal -nocase $k "sec-websocket-protocol"] } {
+	    set protos [split $v ","]
+	}
+    }
+
+    # We thought we had a websocket, but no security handshake is
+    # provided by client. Discard this connection!
+    if { $key eq "" } {
+	return 0
+    }
+
+    # Create a context for the incoming client
+    set varname [namespace current]::Client_${srvSock}_${cliSock}
+    upvar \#0 $varname Client
+    
+    set Client(server) $srvSock
+    set Client(sock) $cliSock
+    set Client(key) $key
+    set Client(accept) ""
+    set Client(path) $path
+    set Client(query) $qry
+    if { $key ne "" } {
+	set sec ${key}$WS(ws_magic)
+	set Client(accept) [::base64::encode [sha1::sha1 -bin $sec]]
+    }
+    set Client(protos) $protos
+    set Client(protocol) ""
+    
+    # Search amongst existing WS handlers for one that responds to
+    # that URL and implement one of the protocols.
+    foreach { ptn cb proto } $Server(live) {
+	set idx [lsearch -glob $protos $proto]
+	if { [string match -nocase $ptn $path] \
+		 && ( $protos == "" || $idx >= 0 ) } {
+	    # Found it! Remember it in the client context.
+	    if { $idx >= 0 } {
+		set Client(protocol) [lindex $protos $idx]
+	    }
+	    set Client(live) $cb
+	    break
+	}
+    }
+    
+    # Return the context for the incoming client.
+    return 1
+}
+
+
+# ::websocket::upgrade -- Upgrade socket to WebSocket in servers
+#
+#       Upgrade a socket that had been deemed to be an incoming
+#       WebSocket connection request (see ::websocket::test) to a true
+#       WebSocket.  This procedure will send the necessary connection
+#       handshake to the client, arrange for the relevant callbacks to
+#       be made during the life of the WebSocket and mediate of the
+#       incoming request via a special "request" message.
+#
+# Arguments:
+#	sock	Socket to client.
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       The socket is kept open and becomes a WebSocket, pushing out
+#       callbacks as explained in ::websocket::takeover and accepting
+#       messages as explained in ::websocket::send.
+proc ::websocket::upgrade { sock } {
+    variable WS
+    variable log
+
+    set clients [info vars [namespace current]::Client_*_${sock}]
+    if { [llength $clients] == 0 } {
+	${log}::warn "$sock does not point to a client WebSocket"
+	return -code error "$sock is not a WebSocket client"
+    }
+
+    set c [lindex $clients 0];   # Should only be one really...
+    upvar \#0 $c Client
+
+    # Write client response header, this is the last time we speak
+    # "http"...
+    puts $sock "HTTP/1.1 101 Switching Protocols"
+    puts $sock "Upgrade: websocket"
+    puts $sock "Connection: Upgrade"
+    puts $sock "Sec-WebSocket-Accept: $Client(accept)"
+    if { $Client(protocol) != "" } {
+	puts $sock "Sec-WebSocket-Protocol: $Client(protocol)"
+    }
+    puts $sock ""
+    flush $sock
+
+    # Make the socket a websocket
+    takeover $sock $Client(live) 1
+
+    # Tell the websocket handler that we have a new incoming
+    # request. We mediate this through the "message" part, which in
+    # this case is composed of a list containing the URL and the query
+    # (itself as a list).  Implementation is rather ugly since we call
+    # the hidden method in the websocket code!
+    Push $sock request [list $Client(path) $Client(query)]
+
+    # Get rid of the temporary client state
+    unset $c
+}
+
+
+# ::websocket::live -- Register WebSocket callbacks for servers
+#
+#       This procedure registers callbacks that will be performed on a
+#       WebSocket compliant server whenever a client connects to a
+#       matching path and protocol.
+#
+# Arguments:
+#	sock	Socket to known WebSocket compliant HTTP server.
+#	path	glob-style path to match in client.
+#	cb	command to callback (same args as ::websocket::takeover)
+#	proto	Application protocol
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       None.
+proc ::websocket::live { sock path cb { proto "*" } } {
+    variable WS
+    variable log
+
+    set varname [namespace current]::Server_$sock
+    if { ! [info exists $varname] } {
+	${log}::warn "$sock is not a WebSocket server anymore"
+	return -code error "$sock is not a WebSocket"
+    }
+    upvar \#0 $varname Server
+
+    lappend Server(live) $path $cb $proto
+}
+
+
+# ::webserver::server -- Declare WebSocket server
+#
+#       This procedure registers the (accept) socket passed as an
+#       argument as the identifier for an HTTP server that is capable
+#       of doing WebSocket.
+#
+# Arguments:
+#	sock	Socket on which the server accepts incoming connections.
+#
+# Results:
+#       Return the socket.
+#
+# Side Effects:
+#       None.
+proc ::websocket::server { sock } {
+    variable WS
+    variable log
+
+    set varname [namespace current]::Server_$sock
+    upvar \#0 $varname Server
+    set Server(sock) $sock
+    set Server(live) {}
+
+    return $sock
 }
 
 
@@ -390,7 +621,7 @@ proc ::websocket::send { sock type {msg ""} {final 1}} {
     }
 
     # Encode text
-    set type [__type $Connection(write:opcode)]
+    set type [Type $Connection(write:opcode)]
     if { $Connection(write:opcode) == 1 } {
 	set msg [encoding convertto utf-8 $msg]
     }
@@ -438,7 +669,7 @@ proc ::websocket::send { sock type {msg ""} {final 1}} {
     if { [string is false $Connection(server)] } {
 	set mask [expr {int(rand()*4294967296)}]
 	append header [binary format Iu $mask]
-	set msg [__mask $mask $msg]
+	set msg [Mask $mask $msg]
     }
     
     # Send the (masked) frame
@@ -451,7 +682,7 @@ proc ::websocket::send { sock type {msg ""} {final 1}} {
     }
 
     # Keep socket alive at all times.
-    __liveness $sock
+    Liveness $sock
 
     if { [string is true $final] } {
 	${log}::debug "Sent $mlen bytes long $type final fragment to $dst"
@@ -462,7 +693,7 @@ proc ::websocket::send { sock type {msg ""} {final 1}} {
 }
 
 
-# ::websocket::__mask -- Mask data according to RFC
+# ::websocket::Mask -- Mask data according to RFC
 #
 #       XOR mask data with the provided mask as described in the RFC.
 #
@@ -476,7 +707,7 @@ proc ::websocket::send { sock type {msg ""} {final 1}} {
 #
 # Side Effects:
 #       None.
-proc ::websocket::__mask { mask dta } {
+proc ::websocket::Mask { mask dta } {
     variable WS
     variable log
 
@@ -499,7 +730,7 @@ proc ::websocket::__mask { mask dta } {
 }
 
 
-# ::websocket::__receiver -- Receive (framed) data from WebSocket
+# ::websocket::Receiver -- Receive (framed) data from WebSocket
 #
 #       Received framed data from a WebSocket, recontruct all
 #       fragments to a complete message whenever the final fragment is
@@ -517,7 +748,7 @@ proc ::websocket::__mask { mask dta } {
 #
 # Side Effects:
 #       Read a frame from the socket, possibly blocking while reading.
-proc ::websocket::__receiver { sock } {
+proc ::websocket::Receiver { sock } {
     variable WS
     variable log
 
@@ -529,7 +760,7 @@ proc ::websocket::__receiver { sock } {
     upvar \#0 $varname Connection
 
     # Keep connection alive by issuing pings.
-    __liveness $sock
+    Liveness $sock
 
     # Get basic header.  Abort if reserved bits are set, unexpected
     # continuation frame, fragmented or oversized control frame, or
@@ -614,7 +845,7 @@ proc ::websocket::__receiver { sock } {
 	    close $sock 1001
 	    return
 	}
-	append Connection(read:msg) [__mask $mask $bytes]
+	append Connection(read:msg) [Mask $mask $bytes]
     } else {
 	if { [catch {read $sock $len} bytes] \
 		 || [string length $bytes] != $len } {
@@ -630,7 +861,7 @@ proc ::websocket::__receiver { sock } {
     } else {
 	set dst "server"
     }
-    set type [__type $Connection(read:mode)]
+    set type [Type $Connection(read:mode)]
 
     # If the FIN bit is set, process the frame.
     if { $header & 0x8000 } {
@@ -638,12 +869,12 @@ proc ::websocket::__receiver { sock } {
 	switch $opcode {
 	    1 {
 		# Text: decode and notify handler
-		__push $sock text \
+		Push $sock text \
 		    [encoding convertfrom utf-8 $Connection(read:msg)]
 	    }
 	    2 {
 		# Binary: notify handler, no decoding
-		__push $sock binary $Connection(read:msg)
+		Push $sock binary $Connection(read:msg)
 	    }
 	    8 {
 		# Close: decode, notify handler and close frame.
@@ -662,7 +893,7 @@ proc ::websocket::__receiver { sock } {
 		# Ping: send pong back and notify handler since this
 		# might contain some data.
 		send $sock 10 $Connection(read:msg)
-		__push $sock ping $Connection(read:msg)
+		Push $sock ping $Connection(read:msg)
 	    }
 	}
 
@@ -728,15 +959,15 @@ proc ::websocket::takeover { sock handler { server 0 } } {
     set Connection(-ping) $WS(-ping)
 
     fconfigure $sock -translation binary -blocking on
-    fileevent $sock readable [list [namespace current]::__receiver $sock]
-    __liveness $sock
+    fileevent $sock readable [list [namespace current]::Receiver $sock]
+    Liveness $sock
     
     ${log}::debug "$sock has been registered as a\
                    [expr $server?\"server\":\"client\"] WebSocket"
 }
 
 
-# ::websocket::__connected -- Handshake and framing initialisation
+# ::websocket::Connected -- Handshake and framing initialisation
 #
 #       Performs the security handshake once connection to a remote
 #       WebSocket server has been established and handshake properly.
@@ -754,7 +985,7 @@ proc ::websocket::takeover { sock handler { server 0 } } {
 #
 # Side Effects:
 #       None.
-proc ::websocket::__connected { opener sock token } {
+proc ::websocket::Connected { opener sock token } {
     variable WS
     variable log
 
@@ -813,10 +1044,10 @@ proc ::websocket::__connected { opener sock token } {
 	# Takeover the socket to create a connection and mediate about
 	# connection via the handler.
 	takeover $sock $OPEN(handler)
-	__push $sock connect $proto;  # Tell the handler which
+	Push $sock connect $proto;  # Tell the handler which
 				      # protocol was chosen.
     } else {
-	__push \
+	Push \
 	    "" \
 	    error \
 	    "Protocol error during WebSocket connection with $OPEN(url)" \
@@ -829,9 +1060,9 @@ proc ::websocket::__connected { opener sock token } {
 }
 
 
-# ::websocket::__finished -- Pass further on HTTP connection finalisation
+# ::websocket::Finished -- Pass further on HTTP connection finalisation
 #
-#       Pass further to __connected whenever the HTTP operation has
+#       Pass further to Connected whenever the HTTP operation has
 #       been finished as implemented by the HTTP package.
 #
 # Arguments:
@@ -844,12 +1075,12 @@ proc ::websocket::__connected { opener sock token } {
 #
 # Side Effects:
 #       None.
-proc ::websocket::__finished { opener token } {
-    __connected $opener "" $token
+proc ::websocket::Finished { opener token } {
+    Connected $opener "" $token
 }
 
 
-# ::websocket::__timeout -- Timeout an HTTP connection
+# ::websocket::Timeout -- Timeout an HTTP connection
 #
 #       Reimplementation of the timeout facility from the HTTP package
 #       to be able to cleanup internal state properly and mediate to
@@ -864,7 +1095,7 @@ proc ::websocket::__finished { opener token } {
 # Side Effects:
 #       Reset the HTTP connection, which will (probably) close the
 #       socket.
-proc ::websocket::__timeout { opener } {
+proc ::websocket::Timeout { opener } {
     variable WS
     variable log
 
@@ -872,7 +1103,7 @@ proc ::websocket::__timeout { opener } {
 	upvar \#0 $opener OPEN
 	
 	::http::reset $OPEN(token) "timeout"
-	__push "" timeout "Timeout when connecting to $OPEN(url)" $OPEN(handler)
+	Push "" timeout "Timeout when connecting to $OPEN(url)" $OPEN(handler)
 	::http::cleanup $OPEN(token)
 	unset $opener
     }
@@ -992,8 +1223,8 @@ proc ::websocket::open { url handler args } {
     # we would like to intercept this earlier on.  This has to do with
     # the internals of the HTTP package.
     lappend cmd \
-	-handler [list [namespace current]::__connected $varname] \
-	-command [list [namespace current]::__finished $varname] \
+	-handler [list [namespace current]::Connected $varname] \
+	-command [list [namespace current]::Finished $varname] \
 	-keepalive 1
 
     # Now open the connection to the remote server using the HTTP
@@ -1005,7 +1236,7 @@ proc ::websocket::open { url handler args } {
 	set OPEN(token) $token
 	if { $timeout > 0 } {
 	    set OPEN(timeout) \
-		[after $timeout [namespace current]::__timeout $varname]
+		[after $timeout [namespace current]::Timeout $varname]
 	}
     }
 
@@ -1099,7 +1330,7 @@ proc ::websocket::configure { sock args } {
 	    k* {
 		# Change keepalive
 		set Connection(-keepalive) $v
-		__liveness $sock;  # Change at once.
+		Liveness $sock;  # Change at once.
 	    }
 	    p* {
 		# Change ping, i.e. text used during the automated pings.
@@ -1110,4 +1341,4 @@ proc ::websocket::configure { sock args } {
 }
 
 
-package provide websocket 1.0
+package provide websocket 1.1
