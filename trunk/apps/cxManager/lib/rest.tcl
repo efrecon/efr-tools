@@ -515,6 +515,10 @@ proc ::rest:stream { sock type msg } {
 		foreach {o c} [::find:uuid $uuid object] break
 		if { $o ne "" } {
 		    set t [::trigger:new $o $qry]
+		} else {
+		    $CM(log)::warn "Object with UUID $uuid does not exist,\
+                                    closing stream socket"
+		    ::websocket::close $sock 1000 "Cannot find object $uuid"
 		}
 	    }
 	}
@@ -533,6 +537,9 @@ proc ::rest:stream { sock type msg } {
 		    set c [[$CM(cx) get schema] find [::uobj::type $OBJ(id)]]
 		    ::object:set $OBJ(id) $c $dta
 		}
+	    } else {
+		$CM(log)::warn "Cannot find trigger associated to websocket\
+                                $sock!"
 	    }
 	}
 	"cl*" {
@@ -540,6 +547,9 @@ proc ::rest:stream { sock type msg } {
 	    set t [::trigger:find receiver "sock:$sock"]
 	    if { $t ne "" } {
 		::trigger:destroy $t
+	    } else {
+		$CM(log)::warn "Cannot find trigger associated to websocket\
+                                $sock!"
 	    }
 	}
     }
