@@ -276,6 +276,7 @@ proc ::dev:__plug { p e args } {
 	upvar \#0 $p PLUG
 
 	switch $e {
+	    Inited -
 	    Switch {
 		# Forwards (new) state of plug as a JSON format to the
 		# context manager along the websocket.
@@ -414,6 +415,7 @@ proc ::dev:connect { p } {
 	set plug [::plugwise::new $PLUG(mac) -dev $PWISE(serial)]
 	if { $plug ne "" } {
 	    set PLUG(plug) $plug
+	    ::event::bind $PLUG(plug) Inited "::dev:__plug $p %e"
 	    ::event::bind $PLUG(plug) Switch "::dev:__plug $p %e"
 	    ::event::bind $PLUG(plug) Demand "::dev:__plug $p %e %p"
 	    ::event::bind $PLUG(plug) Energy "::dev:__plug $p %e %y %t"

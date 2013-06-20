@@ -68,6 +68,7 @@ namespace eval ::plugwise {
 	    -log         60
 	    dft_mac_pfx  000D6F0000
 	    debug        off
+	    slots        4
 	}
 	variable version 0.1
 	variable libdir [file dirname [file normalize [info script]]]
@@ -97,7 +98,10 @@ namespace eval ::plugwise {
 # have to poll, starting a new process every xx seconds, and this for
 # each plug.  To spread the load, the initial check for status is
 # delayed using a random number so as to minimise the load on the
-# resources.
+# resources.  To ensure that the serial device is only used by one of
+# our processes at a time, this library implements a (prioritised)
+# queue for commands to be issued against the plugwise USB (and its
+# serial interface).
 
 
 # TODO
@@ -154,6 +158,30 @@ proc ::plugwise::mac { mac } {
 }
 
 
+proc ::plugwise::__state { p state } {
+    variable PWISE
+    variable log
+
+    if { ![::uobj::isa $p plug] } {
+	return -code error "$p unknown or wrong type!"
+    }
+    upvar \#0 $p PLUG
+
+    ${log}::notice "Changing state of $PLUG(mac) to $state"
+    # Make a command that starts by changing the state and then
+    # reads the current state to check that we were successful.
+    set cmd "|\"$PWISE(-controller)\" -m $PLUG(mac) -d $PLUG(-dev)\
+                  -s [string is true $state] -q relay_state"
+    set fd [open $cmd]
+    fconfigure $fd -buffering line -blocking 1 -translation lf
+    set state [string trim [read $fd]]; # Read state of plug!
+    close $fd
+    set PLUG(-state) $state
+    ${log}::info "Plug $PLUG(mac) now in state: $state"
+    ::event::generate $p Switch
+}
+
+
 # ::plugwise::switch -- Switch a plugwise on and off
 #
 #       This procedure can be used to turn on or off the relay that is
@@ -163,6 +191,7 @@ proc ::plugwise::mac { mac } {
 # Arguments:
 #	p	Identifier of the plugwise object
 #	state	New state (should be a boolean). Empty for query only.
+#       sync    Should we wait for state to be physically set at plug?
 #
 # Results:
 #       Return the state of the plugwise.  If the state was changed,
@@ -172,7 +201,7 @@ proc ::plugwise::mac { mac } {
 #
 # Side Effects:
 #       None.
-proc ::plugwise::switch { p { state "" } } {
+proc ::plugwise::switch { p { state "" } { sync on } } {
     variable PWISE
     variable log
 
@@ -182,18 +211,12 @@ proc ::plugwise::switch { p { state "" } } {
     upvar \#0 $p PLUG
 
     if { $state ne "" } {
-	${log}::notice "Changing state of $PLUG(mac) to $state"
-	# Make a command that starts by changing the state and then
-	# reads the current state to check that we were successful.
-	set cmd "|\"$PWISE(-controller)\" -m $PLUG(mac) -d $PLUG(-dev)\
-                  -s [string is true $state] -q relay_state"
-	set fd [open $cmd]
-	fconfigure $fd -buffering line -blocking 1 -translation lf
-	set state [string trim [read $fd]]; # Read state of plug!
-	close $fd
-	set PLUG(-state) $state
-	${log}::info "Plug $PLUG(mac) now in state: $state"
-	::event::generate $p Switch
+	${log}::debug "Requesting for plug $PLUG(mac) to be at state $state urgently"
+	set id [__enqueue $PLUG(queue) -1 $p \
+		    "[namespace current]::__state %plug% $state"]
+	if { [string is true $sync] } {
+	    __wait $PLUG(queue) $id
+	}
     }
 
     return $PLUG(-state)
@@ -239,6 +262,10 @@ proc ::plugwise::get { p what } {
 	}
 	power {
 	    return [lindex $PLUG(usage) end]
+	}
+	last_logaddr -
+	slot {
+	    return $PLUG(slot)
 	}
 	hz -
 	hw_ver -
@@ -322,44 +349,35 @@ proc ::plugwise::__pulse { p { poller "power" } { op "next" } } {
     ::switch $poller {
 	"power" {
 	    set freq $PLUG(-frequency)
-	    set cmd [namespace current]::__check:power
+	    set cmd "[namespace current]::__check:power %plug%"
 	}
 	"energy" {
 	    set freq $PLUG(-log)
-	    set cmd [namespace current]::__check:energy
+	    set cmd "[namespace current]::__check:energy %plug%"
 	}
 	default {
 	    return -code error "$poller is not a recognised poller!"
 	}
     }
 
-
     ::switch $op {
 	delete -
 	destroy -
 	clean {
-	    if { $PLUG(poll:$poller) ne "" } {
-		after cancel $PLUG(poll:$poller)
-	    }
-	    set PLUG(poll:$poller) ""
+	    __dequeue $PLUG(queue) $p $cmd
 	}
 	next {
-	    if { $PLUG(poll:$poller) ne "" } {
-		after cancel $PLUG(poll:$poller)
-	    }
+	    __dequeue $PLUG(queue) $p $cmd
 	    set when [expr {int($freq*1000)}]
-	    set PLUG(poll:$poller) [after $when $cmd $p]
+	    __enqueue $PLUG(queue) $when $p $cmd
 	}
 	first -
 	init {
-	    if { $PLUG(poll:$poller) ne "" } {
-		after cancel $PLUG(poll:$poller)
-	    }
+	    __dequeue $PLUG(queue) $p $cmd
 	    set when [expr {int(rand()*$freq*1000)}]
-	    set PLUG(poll:$poller) [after $when $cmd $p]
+	    __enqueue $PLUG(queue) $when $p $cmd
 	}
     }
-    return $PLUG(poll:$poller)
 }
 
 
@@ -486,7 +504,7 @@ proc ::plugwise::__check:power { p } {
 		    }
 		    ::event::generate $p Collect \
 			[list %p $use %d "$old" %t $now]
-		    ${log}::debug "Plug using ${use}W"
+		    ${log}::debug "Plug $PLUG(mac) using ${use}W"
 		} elseif { [string match "error:*" $l] } {
 		    ${log}::error "Error when communicating with plugwise: $l"
 		    incr errs
@@ -546,14 +564,16 @@ proc ::plugwise::__check:energy { p } {
 
     set errs 0
     if { $PLUG(state) eq "INITED" } {
-	${log}::debug "Checking energy log of plug $PLUG(mac)"
+	${log}::debug "Checking energy log of plug $PLUG(mac) at slot #$PLUG(slot)"
 	set cmd "|\"$PWISE(-controller)\" -m $PLUG(mac) -d $PLUG(-dev)\
-                  -l current"
+                  -l $PLUG(slot)"
     
 	set fd [open $cmd]
 	fconfigure $fd -buffering line -blocking 1 -translation lf
 
 	set empty 0
+	set reported 0
+	set slots 0
 	while { ! [eof $fd] } {
 	    set l [string trim [string tolower [gets $fd]]]
 	    if { $l ne "" } {
@@ -567,11 +587,17 @@ proc ::plugwise::__check:energy { p } {
 		} elseif { [string first "n/a" $l] >= 0 } {
 		    incr empty
 		} else {
+		    incr slots
 		    foreach {day hour energy unit} $l break
 		    set date [clock scan "$day $hour" -format "%Y-%m-%d %H"]
 		    if { [lsearch $PLUG(energy) $date] < 0 } {
 			lappend PLUG(energy) $date $energy
+			set strdate [clock format $date -format "%Y%m%d-%H:%M:%S"]
+			${log}::debug "Found new energy log for $PLUG(mac) for\
+                                       latest period: at $strdate, $energy $unit\
+                                       had been used"
 			::event::generate $p Energy [list %t $date %y $energy]
+			incr reported
 		    }
 		}
 	    }
@@ -586,6 +612,17 @@ proc ::plugwise::__check:energy { p } {
 	}
     }
 
+    # Try again if we've reached the maximum number of slots. Advance
+    # to next memory slot on plug.  Give a try at getting energy data
+    # from there as well to cope with startup conditions.
+    if { $slots >= $PWISE(slots) } {
+	incr PLUG(slot)
+	__pulse $p energy next
+	${log}::info "Advancing to memory slot #$PLUG(slot) for plug $PLUG(mac)"
+    }
+
+    # Try again later if we had errors or if there wasn't any value to
+    # report from the plug yet.
     if { [__error $p $errs] >= 0 } {
 	__pulse $p energy next
     }
@@ -627,6 +664,81 @@ proc ::plugwise::jsdate { str } {
 }
 
 
+proc ::plugwise::__init { p { force 0 } } {
+    variable PWISE
+    variable log
+
+    if { ![::uobj::isa $p plug] } {
+	return -code error "$p unknown or wrong type!"
+    }
+    upvar \#0 $p PLUG
+
+    if { [lsearch [list "ERROR" "NONE"] $PLUG(state)] >= 0 || [string is true $force] } {
+	# Synchronise the clock with computer clock on initialisation and
+	# get information about device
+	set cmd "|\"$PWISE(-controller)\" -m $PLUG(mac) -d $PLUG(-dev) -t sync -i"
+	
+	${log}::debug "Initialising plug $PLUG(mac)"
+	set fd [open $cmd]
+	fconfigure $fd -buffering line -blocking 1 -translation lf
+	while { ! [eof $fd] } {
+	    set line [string trim [gets $fd]]
+	    if { [string is true $PWISE(debug)] } {
+		${log}::debug "Initialisation: $line"
+	    }
+	    if { [string match -nocase info* $line] } {
+	    } elseif { $line eq "" } {
+	    } elseif { [string match -nocase "Error:*" $line] } {
+		${log}::error "Error when communicating with plugwise: $line"
+		set PLUG(state) ERROR
+		break
+	    } elseif { [string match -nocase "*:*" $line] } {
+		foreach {k v} [split $line ":"] break
+		set k [string trim $k "{' \t\r\n"]
+		set v [string trim $v " \t\r\n',}"]
+		::switch -glob -- $k {
+		    hw_ver -
+		    hz {
+			set PLUG(nfo:$k) $v
+		    }
+		    fw_ver -
+		    datetime {
+			set PLUG(nfo:$k) [jsdate $v]
+		    }
+		    last_logaddr {
+			# Remember which memory slot we are at, arrange to
+			# be just one before in order to better arrange
+			# for resynchronisation at startup.
+			set PLUG(slot) $v
+			if { $v > 0 } {
+			    incr PLUG(slot) -1
+			}
+			${log}::info "Starting to get energy history from plug $PLUG(mac)\
+                                  at memory slot #$PLUG(slot)."
+		    }
+		    *state {
+			set PLUG(-state) [string is true $v]
+			${log}::info "Plug $PLUG(mac) in state: $PLUG(-state)"
+		    }
+		}
+	    }
+	}
+	close $fd
+
+	if { $PLUG(state) eq "ERROR" } {
+	    ::event::generate $p Error
+	} else {
+	    set PLUG(state) INITED
+	    set PLUG(errors) 0
+	    ::event::generate $p Inited
+
+	    __pulse $p power init
+	    __pulse $p energy init
+	}
+    }
+}
+
+
 # ::plugwise::init -- Initialisation of a plug
 #
 #       This procedure is typically (automatically) called one a
@@ -646,7 +758,7 @@ proc ::plugwise::jsdate { str } {
 #
 # Side Effects:
 #       None.
-proc ::plugwise::init { p } {
+proc ::plugwise::init { p { sync off } } {
     variable PWISE
     variable log
 
@@ -655,57 +767,258 @@ proc ::plugwise::init { p } {
     }
     upvar \#0 $p PLUG
 
-    # Synchronise the clock with computer clock on initialisation and
-    # get information about device
-    set cmd "|\"$PWISE(-controller)\" -m $PLUG(mac) -d $PLUG(-dev) -t sync -i"
-    
-    ${log}::debug "Initialising plug $PLUG(mac)"
-    set fd [open $cmd]
-    fconfigure $fd -buffering line -blocking 1 -translation lf
-    while { ! [eof $fd] } {
-	set line [string trim [gets $fd]]
-	if { [string is true $PWISE(debug)] } {
-	    ${log}::debug "Initialisation: $line"
+    set id [__enqueue $PLUG(queue) -1 $p "[namespace current]::__init $p]"]
+    if { [string is true $sync] } {
+	__wait $PLUG(queue) $id
+    }
+}
+
+
+proc ::plugwise::__queue { dev } {
+    variable PWISE
+    variable log
+
+    set q [::uobj::find [namespace current] queue \
+	       [list -dev == $dev]]
+    if { $q eq "" } {
+	set q [::uobj::new [namespace current] queue]
+	upvar \#0 $q QUEUE
+
+	set QUEUE(-dev) $dev;   # Serial device the queue is associated to
+	set QUEUE(pending) {};  # List of pending commands in queue
+	set QUEUE(idgene) 0;    # Command id generator
+	set QUEUE(state) IDLE;  # Current state of queue: IDLE or EXEC
+	set QUEUE(timer) "";    # After timer id for queue content check
+	set QUEUE(latest) -1;   # Identifier of latest executed command
+    }
+    return $q
+}
+
+
+proc ::plugwise::__wait { q id } {
+    variable PWISE
+    variable log
+
+    if { ![::uobj::isa $q queue] } {
+	return -code error "$q unknown or wrong type!"
+    }
+    upvar \#0 $q QUEUE
+
+    ${log}::debug "Waiting for command \#$id to end..."
+
+    # Account for the list of command ids that we executed while
+    # waiting for the completion of the command that we are waiting
+    # for.
+    set executed {}
+
+    # If the latest command executed was the one that we are waiting
+    # for, we are done already.  Nothing to wait for...
+    if { $QUEUE(latest) == $id } {
+	${log}::debug "Nothing to wait for, already executed!"
+	return $executed
+    }
+
+    # Now wait for the end of the execution of commands, and for each,
+    # check if this is the one that we are waiting for.
+    while { 1 } {
+	vwait ${q}(latest);    # Wait for finalised execution of next command
+	lappend executed $QUEUE(latest)
+	if { $QUEUE(latest) == $id } {
+	    ${log}::debug "Executed commands with ids $executed while waiting"
+	    return $executed;  # Return all commands executed in the mean time.
 	}
-	if { [string match -nocase info* $line] } {
-	} elseif { $line eq "" } {
-	} elseif { [string match -nocase "Error:*" $line] } {
-	    ${log}::error "Error when communicating with plugwise: $line"
-	    set PLUG(state) ERROR
-	    break
-	} elseif { [string match -nocase "*:*" $line] } {
-	    foreach {k v} [split $line ":"] break
-	    set k [string trim $k "{' \t\r\n"]
-	    set v [string trim $v " \t\r\n',}"]
-	    ::switch -glob -- $k {
-		hw_ver -
-		hz -
-		last_logaddr {
-		    set PLUG(nfo:$k) $v
-		}
-		fw_ver -
-		datetime {
-		    set PLUG(nfo:$k) [jsdate $v]
-		}
-		*state {
-		    set PLUG(-state) [string is true $v]
-		    ${log}::info "Plug $PLUG(mac) in state: $PLUG(-state)"
+    }
+    return {};   # Never reached
+}
+
+
+proc ::plugwise::__peek { q } {
+    variable PWISE
+    variable log
+
+    if { ![::uobj::isa $q queue] } {
+	return -code error "$q unknown or wrong type!"
+    }
+    upvar \#0 $q QUEUE
+
+    # Order the queue according to execution timestamps.
+    set time_ordered [lsort -increasing -index 1 $QUEUE(pending)]
+	
+    # Access next item in queue to be executed, make sure we have
+    # one, otherwise we can simply return.
+    return [lindex $time_ordered 0]
+}
+
+
+proc ::plugwise::__tstamp { when } {
+    set secs [expr int($when/1000)]
+    set tstamp [clock format $secs -format "%Y:%m:%d-%H:%M:%S"]
+    append tstamp ".[format %.3d [expr {$when-($secs*1000)}]]"
+
+    return $tstamp
+}
+
+
+proc ::plugwise::__pqueue { q } {
+    variable PWISE
+    variable log
+
+    if { ![::uobj::isa $q queue] } {
+	return -code error "$q unknown or wrong type!"
+    }
+    upvar \#0 $q QUEUE
+
+    # Order the queue according to execution timestamps.
+    set time_ordered [lsort -increasing -index 1 $QUEUE(pending)]
+
+    foreach spec $time_ordered {
+	foreach {id when p cmd rdv} $spec break
+	upvar \#0 $p PLUG
+	puts "CMD\#[format %.5d $id] in plug $PLUG(mac): [__tstamp $when] --> $cmd"
+    }
+}
+
+
+proc ::plugwise::__execute { q } {
+    variable PWISE
+    variable log
+
+    if { ![::uobj::isa $q queue] } {
+	return -code error "$q unknown or wrong type!"
+    }
+    upvar \#0 $q QUEUE
+
+    if { $QUEUE(state) eq "IDLE" } {
+	# Remove current timer, if any
+	if { $QUEUE(timer) ne "" } {
+	    after cancel $QUEUE(timer)
+	}
+	set QUEUE(timer) ""
+
+	# Access next item in queue to be executed, make sure we have
+	# one, otherwise we can simply return.
+	set next [__peek $q]
+	if { $next eq "" } {
+	    ${log}::debug "No commands to execute in queue"
+	    return
+	}
+	foreach {id when p cmd rdv} $next break
+	
+	# Decide when to execute
+	set now [clock clicks -milliseconds]
+	if { $now < $when } {
+	    # Schedule to execute later
+	    set elapsed [expr {$when-$now}]
+	    ${log}::debug "$elapsed ms to next command (\#$id) in queue"
+	    set QUEUE(timer) [after $elapsed [namespace current]::__execute $q]
+	} else {
+	    ${log}::debug "Time has come to execute top command (\#$id) in queue"
+	    # We don't have time, we are already late: evaluate the
+	    # command and its rendez-vous (if any).
+	    set QUEUE(state) EXEC
+	    set cmd [string map [list %plug% $p \
+				     %queue% $q \
+				     %index% $id \
+				     %schedule% $when \
+				     %now% $now] $cmd]
+	    if { [catch {eval $cmd} res] } {
+		${log}::warn "Could not execute queued command $cmd: $res"
+	    } else {
+		set rdv [string map [list %plug% $p \
+					 %queue% $q \
+					 %index% $id \
+					 %schedule% $when \
+					 %now% $now \
+					 %result% $res] $rdv]
+		if { $rdv ne "" } {
+		    if { [catch {eval $rdv} err] } {
+			${log}::warn "Could not execute rendez-vous command $rdv:\
+                                      $err"
+		    }
 		}
 	    }
+	    __dequeue $q $id
+	    set QUEUE(latest) $id
+	    set QUEUE(state) IDLE
+	    set QUEUE(timer) [after idle [namespace current]::__execute $q]
 	}
     }
-    close $fd
+}
 
-    if { $PLUG(state) eq "ERROR" } {
-	::event::generate $p Error
-    } else {
-	set PLUG(state) INITED
-	set PLUG(errors) 0
-	::event::generate $p Inited
+proc ::plugwise::__enqueue { q schedule p cmd { rdv "" } } {
+    variable PWISE
+    variable log
 
-	__pulse $p power init
-	__pulse $p energy init
+    if { ![::uobj::isa $q queue] } {
+	return -code error "$q unknown or wrong type!"
     }
+    upvar \#0 $q QUEUE
+
+    # Detect current time and generate an identifier for the command.
+    # This identifier can be used to remove the command from the
+    # queue, for example.
+    set now [clock clicks -milliseconds]
+    set id [incr QUEUE(idgene)]
+
+    # Schedule when to execute the command in the queue.  A positive
+    # number means in xxx ms (from now).  Zero means ASAP.  A negative
+    # number, whichever it is means prioritised ASAP, meaning that
+    # this will be sooner than any command that would have been
+    # scheduled ASAP.  In the end, the variable when contains the
+    # timestamp at which the command should execute.
+    if { $schedule < 0 } {
+	# Peek next command that would be scheduled from the queue and
+	# arrange for our timestamp to be BEFORE the one for that
+	# command.
+	set next [__peek $q]
+	if { $next eq "" } {
+	    set when $now
+	} else {
+	    foreach {- when - - -} $next break
+	    if { $when > $now } {
+		set when $now; # ASAP, next command was further in time
+	    } else {
+		incr when -1;  # 1ms before next command.
+	    }
+	}
+    } else {
+	set when [expr {$now+$schedule}]
+    }
+
+    # Add command to queue, we don't care about the order since we
+    # will be peeking in order each time necessary.
+    ${log}::debug "Enqueuing command \#$id for execution later than [__tstamp $when]"
+    lappend QUEUE(pending) [list $id $when $p $cmd $rdv]
+    __execute $q;   # Test if we should run a command
+
+    return $id
+}
+
+
+proc ::plugwise::__dequeue { q what { filter "*" } } {
+    variable PWISE
+    variable log
+
+    if { ![::uobj::isa $q queue] } {
+	return -code error "$q unknown or wrong type!"
+    }
+    upvar \#0 $q QUEUE
+
+    set newqueue {}
+    foreach spec $QUEUE(pending) {
+	foreach {id when p cmd rdv} $spec break
+	if { [string is integer $what] } {
+	    if { $id != $what || ![string match $filter $cmd] } {
+		lappend newqueue $spec
+	    }
+	} else {
+	    if { $p ne $what || ![string match $filter $cmd] } {
+		lappend newqueue $spec
+	    }
+	}
+	set QUEUE(pending) $newqueue
+    }
+    __execute $q
 }
 
 
@@ -721,21 +1034,29 @@ proc ::plugwise::config { p args } {
     ::uobj::inherit PLUG OLD
     set result [eval ::uobj::config PLUG "-*" $args]
     
-    if { $PLUG(state) eq "NONE" } {
-	init $p
+    # Create/get command queue for device associated to plug.
+    if { $OLD(-dev) ne $PLUG(-dev) && $PLUG(queue) ne "" } {
+	__dequeue $PLUG(queue) $p
+    }
+    if { $PLUG(-dev) ne "" } {
+	set PLUG(queue) [__queue $PLUG(-dev)]
     } else {
+	set PLUG(queue) ""
+    }
+
+    if { [lsearch [list "INITED" "ERROR"] $PLUG(state)] >= 0 } {
 	if { $OLD(-state) ne $PLUG(-state) && $PLUG(-state) ne "" } {
 	    switch $p $PLUG(-state)
 	}
-    }
 
-    if { $OLD(-frequency) ne $PLUG(-frequency) } {
-	if { $PLUG(-frequency) > 0 } {
-	    # (re)initialise the plug state poller whenever we change
-	    # the check frequency.
-	    __pulse $p power init
-	} else {
-	    set PLUG(-frequency) $OLD(-frequency)
+	if { $OLD(-frequency) ne $PLUG(-frequency) } {
+	    if { $PLUG(-frequency) > 0 } {
+		# (re)initialise the plug state poller whenever we change
+		# the check frequency.
+		__pulse $p power init
+	    } else {
+		set PLUG(-frequency) $OLD(-frequency)
+	    }
 	}
     }
 
@@ -744,6 +1065,14 @@ proc ::plugwise::config { p args } {
 	# otherwise every access to the object's properties will
 	# generate a configure event!
 	::event::generate $p Configure
+    }
+
+    # If we haven't initialised the plug yet, do it know.
+    # Initialisation is done in a synchronised manner so that callers
+    # will be able to access at least some of the details of the plug
+    # at initialisation time.
+    if { $PLUG(state) eq "NONE" } {
+	init $p on
     }
 
     return $result
@@ -771,6 +1100,7 @@ proc ::plugwise::new { mac args } {
     set PLUG(poll:energy) ""; # Identifier of energy consumption polling cmd
     set PLUG(energy) {};      # Energy consumption in Wh over time
     set PLUG(errors) 0;       # Number of errors when polling state
+    set PLUG(queue) "";       # Command execution queue.
 
     # Extract from PWISE the options which are not globals and should
     # be inherited by each object, i.e. by each plug.
