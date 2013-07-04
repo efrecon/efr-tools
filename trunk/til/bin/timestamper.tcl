@@ -142,7 +142,7 @@ proc log_out { wid line } {
 set TS(outid) [::outlog::open $TS(outfile) $TS(rotate) $TS(keep)]
 set TS(lid) [::logwatch::new $TS(infile) log_out]
 if { $TS(endoneof) } {
-	::logwatch::eof $TS(lid) "exit"
+	::logwatch::oneof $TS(lid) "exit"
 }
 
 vwait $TS(finish)
