@@ -112,12 +112,26 @@ proc ::logwatch::__readall { } {
 	    }
 	    
 	    # Now consume all available lines and deliver callbacks if
-	    # necessary.
-	    while { [gets $fd line] >= 0 } {
-		# We have some data, if the line matches the
-		# regular expression, deliver the callback
-		if { [regexp $Watch(rxp) $line] } {
-		    uplevel \#0 $Watch(cb) $Watch(id) [list $line]
+	    # necessary.  Segregate properly between end of file and
+	    # empty lines.
+	    set done 0
+	    while { ! $done } {
+		set sz [gets $fd line]
+		if { [eof $fd] } {
+		    set done 1
+		    if { $Watch(eof) != "" } {
+			if { [catch {eval [linsert $Watch(eof) end $id]} err]} {
+			    ${log}::warn "Error when calling back EOF: $err"
+			}
+		    }
+		} elseif { $sz < 0 } {
+		    set done 1
+		} else {
+		    # We have some data, if the line matches the
+		    # regular expression, deliver the callback
+		    if { [regexp $Watch(rxp) $line] } {
+			uplevel \#0 $Watch(cb) $Watch(id) [list $line]
+		    }
 		}
 	    }
 
@@ -175,6 +189,7 @@ proc ::logwatch::new { file cb { rxp "" } } {
     set Watch(id) $LogWatch(w_id)
     set Watch(fname) $file
     set Watch(cb) $cb
+    set Watch(eof) ""
     set Watch(rxp) $rxp
     set Watch(newfile) 1
     ${log}::notice "Started to watch $Watch(fname) for dynamic content"
@@ -286,6 +301,37 @@ proc ::logwatch::info { { id "" } } {
     }
 
     return ""
+}
+
+
+# ::logwatch::oneof -- EOF callback
+#
+#       This procedure arranges for a callback to be made everytime
+#       EOF has been reached on the file that is being watched.  The
+#       identifier of the watch will automatically be appended to the
+#       callback.
+#
+# Arguments:
+#	id	Identifier of one of our watches
+#	cb	Callback command, empty string to turn off
+#
+# Results:
+#       None.
+#
+# Side Effects:
+#       None.
+proc ::logwatch::oneof { id { cb "" } } {
+    variable LogWatch
+    variable log
+
+    # Look to see if this is really one of our ids.
+    set idx [lsearch $LogWatch(watchs) $id]
+    if { $idx >= 0 } {
+	set varname "::logwatch::__LogWatch_$id"
+	upvar \#0 $varname Watch
+
+	set Watch(eof) $cb
+    }
 }
 
 

@@ -42,6 +42,7 @@ set options {
     { verbose.arg "critical" "Verbosity Level" }
     { datesensitive "Should we skip leading date output if it exists?" }
     { ignorepreformat "Should we skip timestamping of preformatted lines?" }
+    { endoneof "Should we die ourselves when eof has been detected?" }
     { rotate.double "168" "Number of hours before rotating, negative to switch off" }
     { keep.integer "4" "How many log files should we keep when rotating?" }
     { outfile.arg "stdout" "Output file, empty means stdout" }
@@ -57,6 +58,7 @@ if { [catch {cmdline::typedGetoptions argv $options} optlist] != 0 } {
 array set TS $optlist
 argutil::boolean TS ignorepreformat
 argutil::boolean TS datesensitive
+argutil::boolean TS endoneof
 foreach key $inited {
     argutil::makelist TS($key)
 }
@@ -139,5 +141,8 @@ proc log_out { wid line } {
 
 set TS(outid) [::outlog::open $TS(outfile) $TS(rotate) $TS(keep)]
 set TS(lid) [::logwatch::new $TS(infile) log_out]
+if { $TS(endoneof) } {
+	::logwatch::eof $TS(lid) "exit"
+}
 
 vwait $TS(finish)
