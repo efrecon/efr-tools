@@ -51,7 +51,6 @@ namespace eval ::websocket {
 	    id_gene        0
 	    -keepalive     30
 	    -ping          ""
-	    -peername      on
 	}
 	variable log [::logger::init [string trimleft [namespace current] ::]]
 	variable libdir [file dirname [file normalize [info script]]]
