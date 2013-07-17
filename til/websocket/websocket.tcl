@@ -51,6 +51,7 @@ namespace eval ::websocket {
 	    id_gene        0
 	    -keepalive     30
 	    -ping          ""
+	    -peername      on
 	}
 	variable log [::logger::init [string trimleft [namespace current] ::]]
 	variable libdir [file dirname [file normalize [info script]]]
@@ -948,6 +949,9 @@ proc ::websocket::New { sock handler { server 0 } } {
     set Connection(handler) $handler
     set Connection(server) $server
 
+    set Connection(peername) 0.0.0.0
+    set Connection(sockname) 127.0.0.1
+    
     set Connection(read:mode) ""
     set Connection(read:msg) ""
     set Connection(write:opcode) -1
@@ -997,6 +1001,22 @@ proc ::websocket::takeover { sock handler { server 0 } } {
     upvar \#0 $varname Connection
     set Connection(state) CONNECTED
 
+    # Gather information about local and remote peer.
+    if { [catch {fconfigure $sock -peername} sockinfo] == 0 } {
+	set Connection(peername) [lindex $sockinfo 1]
+	if { $Connection(peername) eq "" } {
+	    set Connection(peername) [lindex $sockinfo 0]
+	}
+    }
+    if { [catch {fconfigure $sock -sockname} sockinfo] == 0 } {
+	set Connection(sockname) [lindex $sockinfo 1]
+	if { $Connection(sockname) eq "" } {
+	    set Connection(sockname) [lindex $sockinfo 0]
+	}
+    }
+
+    # Listen to incoming traffic on socket and make sure we ping if
+    # necessary.
     fconfigure $sock -translation binary -blocking on
     fileevent $sock readable [list [namespace current]::Receiver $sock]
     Liveness $sock
@@ -1382,7 +1402,8 @@ proc ::websocket::conninfo { sock what } {
             return [string is true $Connection(server)]
         }
         "type" {
-            return [string is true $Connection(server)]?"server":"client"
+            return [expr {[string is true $Connection(server)]?\
+			      "server":"client"}]
         }
         "handler" {
             return $Connection(handler)
