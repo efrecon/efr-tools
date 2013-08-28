@@ -176,6 +176,7 @@ proc ::model::__set { r descr { ns "" } } {
     }
 }
 
+
 proc ::model::__analyse { m lst url refstore ns } {
     variable MODEL
     variable log
@@ -602,7 +603,7 @@ proc ::model::new { schema args } {
     set MDL(self) $m;        # Ourselves
     set MDL(schema) $schema; # Schema to create objects from
     set MDL(objects) {};     # List of objects in model
-    
+
     ::uobj::inherit MODEL MDL
     ::uobj::objectify $m [list [list config configure] add create dump get find]
     eval config $m $args
