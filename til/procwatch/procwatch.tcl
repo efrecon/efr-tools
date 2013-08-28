@@ -856,6 +856,7 @@ proc ::procwatch::start { cx {svcs {}} {force off}} {
 	upvar #0 $s SERVICE
 
 	if { [llength $SERVICE(pid)] > 0 && $force } {
+	    ${log}::debug "Killing processes of service $SERVICE(id)"
 	    foreach pid $SERVICE(pid) {
 		::process::kill $pid
 	    }
@@ -865,6 +866,7 @@ proc ::procwatch::start { cx {svcs {}} {force off}} {
 
 	if { [llength $SERVICE(pid)] == 0 || $force } {
 	    if { $SERVICE(state) ne "DISABLED" } {
+		${log}::info "Scheduling service $s to start in $when ms."
 		set SERVICE(state) STARTING
 		set SERVICE(starting) [after $when ::procwatch::__exec $s]
 		incr when [expr int($CONTEXT(-pause) * 1000)]
@@ -980,6 +982,7 @@ proc ::procwatch::__watch { cx { svcs "" } } {
 	    lappend svc_pids [lindex $SERVICE(pid) 0]
 	}
     }
+    ${log}::debug "pids for our services should be: $svc_pids"
     
     # Gather information for all currently processes running on this
     # machine.  From this list, isolate services that should be
