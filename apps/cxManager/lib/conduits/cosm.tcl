@@ -22,7 +22,7 @@ namespace eval ::cosm {
 	    context        ""
 	    servers        {}
 	    initdone       0
-	    apiroot        "https://api.cosm.com/v2"
+	    apiroot        "https://api.xively.com/v2"
 	    -frequency     180
 	    -timeout       10000
 	    -retries       10
