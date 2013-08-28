@@ -475,7 +475,7 @@ proc ::websocket::upgrade { sock } {
     puts $sock ""
     flush $sock
 
-    # Make the socket a websocket
+    # Make the socket a server websocket
     takeover $sock $Client(live) 1
 
     # Tell the websocket handler that we have a new incoming
