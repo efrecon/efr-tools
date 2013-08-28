@@ -1,3 +1,7 @@
+#!/bin/sh
+# the next line restarts using tclsh \
+exec tclsh "$0" "$@"
+
 ##################
 ## Program Name    --  starter.tcl
 ## Original Author --  Emmanuel Frecon - emmanuel@sics.se
@@ -239,7 +243,7 @@ if { $res == 0 && $dns != "" } {
 }
 
 set ST(pwid) [::procwatch::new -pause $ST(pause) -log $ST(log) -run $ST(run) \
-		  -home $ST(home)]
+		  -home $ST(home) -watch $ST(watch)]
 foreach fname $ST(infiles) {
     foreach sid [::procwatch::read $ST(pwid) \
 		     [::diskutil::fname_resolv $fname]] {
