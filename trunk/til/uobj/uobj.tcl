@@ -1092,7 +1092,7 @@ proc ::uobj::keyword { o key {value "--dO_Not|Set=Value--"}} {
 # ::uobj::resolve -- Superset of the ::diskutil::fname_resolv
 #
 #       This procedure provides a super-set of the facilities offered
-#       by ::diskutil::fname_resolv in that it offers that ability to
+#       by ::diskutil::fname_resolv in that it offers the ability to
 #       use the values of the keys that have been associated to the
 #       object via the ::uobj::keyword procedure.  All declared keys
 #       that are surrounded by % signs in the incoming path will be
