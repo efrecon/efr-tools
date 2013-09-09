@@ -550,13 +550,13 @@ proc ::gcal::__init {} {
 	set gcal(all_calendars) {
 	    url https://www.google.com/calendar/feeds/default/allcalendars/%projection:full%
 	    headers { Authorization {GoogleLogin auth=%token%} }
-	    opt_args { gsessionid: alt: }
+	    opt_args { gsessionid: alt: t: }
 	}
 
 	set gcal(all_events) {
 	    url https://www.google.com/calendar/feeds/%user:default%/%visibility:private%/%projection:full%
 	    headers { Authorization {GoogleLogin auth=%token%} }
-	    opt_args { gsessionid: alt: start-index: max-results: start-min: start-max:}
+	    opt_args { gsessionid: alt: t: start-index: max-results: start-min: start-max:}
 	}
 
 	rest::create_interface gcal
@@ -570,7 +570,12 @@ proc ::gcal::handle_redir {args} {
 
     if {[catch {eval $args} out]} {
         if {[lindex $out 1] == "302"} {
-            eval [linsert $args 1 -gsessionid [rest::parameters [lindex $out 2] gsessionid]]
+	    set parms [rest::parameters [lindex $out 2]]
+	    if { [dict exists $parms gsessionid] } {
+		eval [linsert $args 1 -gsessionid [dict get $parms gsessionid]]
+	    } elseif { [dict exists $parms t] } {
+		eval [linsert $args 1 -t [dict get $parms t]]
+	    }
 	} else {
 	    return -code error $out
 	}
