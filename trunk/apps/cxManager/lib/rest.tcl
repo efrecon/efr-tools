@@ -515,6 +515,10 @@ proc ::rest:stream { sock type msg } {
 		foreach {o c} [::find:uuid $uuid object] break
 		if { $o ne "" } {
 		    set t [::trigger:new $o $qry]
+		    # Force output of object state at websocket
+		    # opening to ease interfacing from external
+		    # programs.
+		    ::trigger:force $t
 		} else {
 		    $CM(log)::warn "Object with UUID $uuid does not exist,\
                                     closing stream socket"
