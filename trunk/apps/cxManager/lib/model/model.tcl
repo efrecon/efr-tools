@@ -41,7 +41,9 @@ proc ::model::__reference { f name ns } {
 	set REF(-class) $cls
 	set REF(-object) [$cls new $ns]
 	set REF(-name) $name
+	set REF(-uuid) ""
 	::uobj::objectify $r [list get]
+	::event::generate $r Reference [list %c $cls %i $REF(-object) %r $name]
     }
     
     return $r
@@ -186,7 +188,17 @@ proc ::model::__analyse { m lst url refstore ns } {
     }
     upvar \#0 $m MDL
 
+    set hex "\[a-fA-F0-9\]"
+    set uuid_filter "[string repeat $hex 8]-[string repeat $hex 4]-[string repeat $hex 4]-[string repeat $hex 4]-[string repeat $hex 12]" 
+
     foreach {type instance descr} $lst {
+	if { [string match "*=$uuid_filter" $instance] } {
+	    foreach {instance uuid} [split $instance "="] break
+	    ${log}::debug "Forcing $instance to UUID $uuid"
+	} else {
+	    set uuid ""
+	}
+	puts "$instance : $uuid"
 	set class [$MDL(schema) find $type]
 	set r ""
 	if { $class eq "" } {
@@ -195,7 +207,9 @@ proc ::model::__analyse { m lst url refstore ns } {
 	    set r [__add $m $class $instance $ns]
 	}
 	if { $r ne "" } {
-	    set o [$r get -object]
+	    upvar \#0 $r REF
+	    set REF(-uuid) $uuid
+	    #set o [$r get -object]
 	    __set $r $descr $ns
 	} else {
 	    return -code error "Cannot instantiate constraints at top level"
@@ -211,8 +225,12 @@ proc ::model::__analyse { m lst url refstore ns } {
 	upvar \#0 $r REF
 	if { [info exists $REF(-object)] } {
 	    upvar \#0 $REF(-object) OBJ
-	    set OBJ(uuid) \
-		[::uuidhash::uuid "$url/[$REF(-class) get uuid]/$REF(-name)"]
+	    if { $REF(-uuid) ne "" } {
+		set OBJ(uuid) $REF(-uuid)
+	    } else {
+		set OBJ(uuid) \
+		    [::uuidhash::uuid "$url/[$REF(-class) get uuid]/$REF(-name)"]
+	    }
 	    if { $refstore ne "" } {
 		set OBJ($refstore) $REF(-name)
 	    }
@@ -293,8 +311,10 @@ proc ::model::__dumpval { fd field val references } {
     variable MODEL
     variable log
 
-    if { [$field get builtin] } {
-	if { [$field get -type] eq "String" } {
+    if { [$field type] ne "" } {
+	# If the field is a builtin or extends one, dump intelligently
+	# with quotes whenever necessary.
+	if { [$field type] eq "String" } {
 	    puts -nonewline $fd "\"$val\""
 	} else {
 	    if { $val eq "" } {
@@ -357,7 +377,7 @@ proc ::model::dump { m { refstore "" } { fd stdout } } {
 
 	    foreach {ro ref} $references {
 		if { $ro eq $o } {
-		    puts $fd "[$class get -name] $ref {\t\# $OBJ(uuid) "
+		    puts $fd "[$class get -name] ${ref}!$OBJ(uuid) { "
 		    foreach f [array names OBJ -*] {
 			set field [$class field $f]
 			if { $OBJ($f) ne "" } {
@@ -514,7 +534,10 @@ proc ::model::__add { m cls { ref "" } { ns "" } } {
 	set REF(-name) $ref
 	set REF(-class) $cls
 	set REF(-object) $o
+	set REF(-uuid) ""
 	::uobj::objectify $r [list get]
+	::event::generate $m Create [list %i $o %c $cls %r $ref %n $ns]
+	::event::generate $m Add [list %i $o %c $cls %r $ref %n $ns]
     } else {
 	upvar \#0 $r REF
 	set o [__specialise $r $cls $ns]
@@ -522,6 +545,9 @@ proc ::model::__add { m cls { ref "" } { ns "" } } {
 	    return -code error "$REF(-name) previously declared as\
 		                a [$REF(-class) get -name] which\
 		                is not a class inherited by [$cls get -name]"
+	} else {
+	    ::event::generate $m Specialise [list %i $o %c $cls %r $ref %n $ns]
+	    ::event::generate $m Add [list %i $o %c $cls %r $ref %n $ns]
 	}
     }
 
