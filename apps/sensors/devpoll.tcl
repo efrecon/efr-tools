@@ -11,12 +11,12 @@ set options {
     { context.arg "https://localhost:8800/" "Root URL to context manager" }
     { report.arg "http://\[aaaa::250:c2a8:c55c:9cc5\]/data fc24cc87-dbfb-5243-5e9c-06ffd532a473 {temp temperature hum humidity pres pressure}" "List of serial/type matches to UUID/fieldName" }
     { sampling.integer "30000" "Sampling rate, keep it low to save batteries!" }
+    { timeout.integer "40000" "HTTP timeout, in msecs" }
 }
 
 array set DVP {
     logfd       ""
     debug       0
-    timeout     40000
     udp         ""
 }
 
@@ -287,13 +287,38 @@ proc ::report { dev } {
 }
 
 
+proc ::dev:__reschedule { d } {
+    global DVP
+    upvar \#0 $d DEV
+    
+    set DEV(state) IDLE
+    if { $DVP(sampling) >= 0 } {
+	set DEV(poll) [after $DEV(-sampling) ::dev:__get $d]
+    } else {
+	set devs [::uobj::allof [namespace current] device]
+	set remaining [llength $devs]
+	foreach dv $devs {
+	    upvar \#0 $dv D
+	    if { $D(state) eq "IDLE" } {
+		incr remaining -1
+	    }
+	}
+	if { $remaining <= 0 } {
+	    $DVP(log)::notice "Done polling once all remote devices, exiting"
+	    exit
+	}
+    }
+}
+
 proc ::dev:__push { d token } {
     global DVP
 
     upvar \#0 $token htstate
     upvar \#0 $d DEV
 
-    if { [::http::ncode $token] == 200 } {
+    set DEV(state) GOT
+    set ncode [::http::ncode $token]
+    if { $ncode == 200 || $ncode == 201 } {
 	# Get data from sensor in JSON format.
 	set data [::http::data $token]
 	set DEV(value) [::json:to_dict $data]
@@ -321,7 +346,7 @@ proc ::dev:__push { d token } {
 
     # Cleanup and re-schedule
     ::http::cleanup $token
-    set DEV(poll) [after $DEV(-sampling) ::dev:__get $d]
+    ::dev:__reschedule $d
 }
 
 
@@ -339,6 +364,7 @@ proc ::dev:__get { dev } {
     upvar \#0 $dev DEV
 
     $DVP(log)::debug "Getting data for device at $DEV(url)"
+    set DEV(state) GETTING
     set gcmd [list ::http::geturl $DEV(url) \
 		  -progress ::dev:__progress \
 		  -blocksize 127 \
@@ -349,7 +375,7 @@ proc ::dev:__get { dev } {
     
     if { [catch {eval $gcmd} token] } {
 	$DVP(log)::error "Error while getting URL at $DEV(url): $token"
-	set DEV(poll) [after $DEV(-sampling) ::dev:__get $dev]
+	::dev:__reschedule $dev
 	set token ""
     }
 
@@ -371,6 +397,7 @@ proc ::dev:init { url } {
 	set DEV(url) $url
 	set DEV(poll) ""
 	set DEV(timestamp) ""
+	set DEV(state) IDLE
 	set DEV(-sampling) $DVP(sampling)
 
 	$DVP(log)::notice "Initialising connection to mote at $url..."
