@@ -224,7 +224,7 @@ proc ::lockfile::__check_lock { id } {
                              $Lock(-suspend) seconds."
 			set Lock(timer) \
 			    [after [expr {$Lock(-suspend) * 1000}] \
-				 __check_lock $id]
+				 ::lockfile::__check_lock $id]
 		    } else {
 			set Lock(errmsg) \
 			    "Could not force removal of inactive\
