@@ -1048,8 +1048,7 @@ proc ::minihttpd::__push { port sock } {
 
 	    foreach { ptn cb fmt } $Server(handlers) {
 		if { [string match -nocase $ptn $Client(url)] } {
-		    if { [catch {$cb $port $sock $Client(url) $Client(query)} \
-			      res] } {
+		    if { [catch {eval [linsert $cb end $port $sock $Client(url) $Client(query)]} res] } {
 			__push_error $port $sock 400 \
 			    "Error when executing internal handler: $res"
 		    } else {
@@ -1062,9 +1061,12 @@ proc ::minihttpd::__push { port sock } {
 	    }
 
 	    # Convert the socket to a web socket if appropriate.
-	    set Client(live) [::websocket::test $Server(listen) $sock \
-				  $Client(url) [headers $port $sock] \
-				  $Client(query)]
+	    set Client(live) 0
+	    if { $Server(live) ne "" } {
+		set Client(live) [::websocket::test $Server(listen) $sock \
+				      $Client(url) [headers $port $sock] \
+				      $Client(query)]
+	    }
 	    
 	    if { $Client(handler) == "" && !$Client(live) } {
 		set mypath ""
