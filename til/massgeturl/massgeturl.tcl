@@ -19,8 +19,9 @@ package require Tcl 8.2
 package require logger
 package require http 2.2
 package require uri
-package require base64
+package require htauth
 package require uid
+package require uobj
 
 package provide massgeturl 1.0
 
@@ -44,47 +45,23 @@ namespace eval ::massgeturl {
 	    -pgessfreq    10000
 	    -priority     5
 	    -maxinactivity 60000
+	    -preparecmd   ""
 	    enc_charmap   {}
 	    dec_charmap   {}
 	    qcheck_id     ""
 	    qcheck_pulse  500
 	    checkhint     0
-	    inheritance   "-timeout -retries -redirects -progress -priority -maxinactivity"
+	    inheritance   "-timeout -retries -redirects -progress -priority -maxinactivity -preparecmd"
 	}
-	variable log [::logger::init [string trimleft [namespace current] ::]]
-	${log}::setlevel $MGU(loglevel)
 	set MGU(uids) [::uid::new]
+	variable libdir [file dirname [file normalize [info script]]]
+	::uobj::install_log massgeturl MGU
+	::uobj::install_defaults massgeturl MGU
     }
 
-    namespace export loglevel new get head syncget synchead infile cancel
+    namespace export \
+	loglevel new get head syncget synchead infile cancel defaults
 }
-
-
-# ::massgeturl::loglevel -- Set/Get current log level.
-#
-#	Set and/or get the current log level for this library.
-#
-# Arguments:
-#	loglvl	New loglevel
-#
-# Results:
-#	Return the current log level
-#
-# Side Effects:
-#	None.
-proc ::massgeturl::loglevel { { loglvl "" } } {
-    variable MGU
-    variable log
-
-    if { $loglvl != "" } {
-	if { [catch "${log}::setlevel $loglvl"] == 0 } {
-	    set MGU(loglevel) $loglvl
-	}
-    }
-
-    return $MGU(loglevel)
-}
-
 
 
 # ::massgeturl::__checkinactivity -- Check download inactivity
@@ -580,17 +557,13 @@ proc ::massgeturl::__queue_check { { host "" } } {
 			set doit 0
 		    }
 
-		    # INitialise TLS when dealing with https
-		    if { $proto == "https" } {
-			if { ! $MGU(tls_inited) } {
-			    if { [catch {package require tls} err] } {
-				__done_finalize $cid "ERROR" \
-				    "Could not initialise TLS: $err"
-				set doit 0
-			    } else {
-				::http::register https 443 ::tls::socket
-				set MGU(tls_inited) 1
-			    }
+		    if { $Fetch(-preparecmd) ne "" } {
+			${log}::debug "Preparing to fetch\
+                                       [::htauth::obfuscate $url]"
+			if { [catch {eval [linsert $Fetch(-preparecmd) end \
+					       $cid $url]} err] } {
+			    ${log}::warn "Failed when calling preparing cmd:$err"
+			    set doit 0
 			}
 		    }
 
@@ -613,13 +586,8 @@ proc ::massgeturl::__queue_check { { host "" } } {
 				     [list ::massgeturl::__progress $cid] \
 				     -command \
 				     [list ::massgeturl::__done $cid]]
-			if { [info exists user] && $user != "" } {
-			    set hdrs [list]
-			    set user [string trimright $user "@"]
-			    set auth [::base64::encode $user]
-			    lappend hdrs Authorization "Basic $auth"
-			    lappend cmd -headers $hdrs
-			}
+			set hdrs [::htauth::headers $url]
+			lappend cmd -headers $hdrs
 			if { $Fetch(-timeout) >= 0 } {
 			    lappend cmd -timeout $Fetch(-timeout)
 			}
@@ -1245,45 +1213,5 @@ proc ::massgeturl::cancel { args } {
 		::http::reset $Fetch(httoken) "cancel"
 	    }
 	}
-    }
-}
-
-
-# ::massgeturl::defaults -- Set/Get defaults for all new connections
-#
-#	This command sets or gets the defaults opetions for all new
-#	connections, it will not perpetrate on existing pending
-#	connections, use ::massgeturl::config instead.
-#
-# Arguments:
-#	args	List of -key value or just -key to get value
-#
-# Results:
-#	Return all options, the option requested or set the options
-#
-# Side Effects:
-#	None.
-proc ::massgeturl::defaults { args } {
-    variable MGU
-    variable log
-
-    set o [lsort [array names MGU "-*"]]
-
-    if { [llength $args] == 0 } {      ;# Return all results
-	set result ""
-	foreach name $o {
-	    lappend result $name $MGU($name)
-	}
-	return $result
-    }
-
-    foreach {opt value} $args {        ;# Get onr or set some
-	if { [lsearch $o $opt] == -1 } {
-	    return -code error "Unknown option $opt, must be: [join $o ,]"
-	}
-	if { [llength $args] == 1 } {  ;# Get one config value
-	    return $MGU($opt)
-	}
-	set MGU($opt) $value           ;# Set the config value
     }
 }

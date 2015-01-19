@@ -29,9 +29,11 @@ namespace eval ::diskutil {
     if {![info exists DiskUtil]} {
 	array set DiskUtil {
 	    tmpdir             ""
+	    gtmpdir            ""
 	    winemu_dir         "~/.CommonStore"
 	    loglevel           warn
 	    comments           "\#"
+	    empty              {\"\" \{\} -}
 	    dft_prgpath        ""
 	}
 	variable log [::logger::init diskutil]
@@ -596,6 +598,96 @@ proc ::diskutil::clean_directory { d { rm_ptn {} } { keep_ptn {} } } {
 }
 
 
+proc ::diskutil::global_platform_tmp {} {
+    global tcl_platform env
+    variable DiskUtil
+    variable log
+
+    if { $DiskUtil(gtmpdir) == "" } {
+	set dirlist {}
+	if { $tcl_platform(platform) == "windows" } {
+	    if { [info exists env(ALLUSERSPROFILE)] } {
+		# Cope with XP, where we had an Application Data, but
+		# also with later versions av windows, where we don't.
+		if { [info exists env(APPDATA)] } {
+		    lappend dirlist \
+			[file join $env(ALLUSERSPROFILE) \
+			     [file tail $env(APPDATA)]]
+		}
+		lappend dirlist \
+		    [file join $env(ALLUSERSPROFILE) "Application Data"]
+		lappend dirlist \
+		    [file join $env(ALLUSERSPROFILE)]
+	    }
+	    # There used to be such a dir, I wonder it still exists at
+	    # all and is accessible. Adding it for "in case".
+	    if { [info exists env(WINDIR)] } {
+		lappend dirlist [file join $env(WINDIR) "Temp"]
+	    }
+	    if { [info exists env(SYSTEMROOT)] } {
+		lappend dirlist [file join $env(SYSTEMROOT) "Temp"]
+	    }
+	} else {
+	    set dirlist [list "/usr/tmp" "/var/tmp"]
+	}
+
+	# Parse the list of possible temporary directories and try to
+	# see if they really are directories that we can access.
+	# Maybe we should also do a file writable, but on windows this
+	# always returns 1 on directories (it seems to be at least).
+	foreach d $dirlist {
+	    if { [file isdirectory $d] } {
+		# The glob will catch if the directory does not
+		# properly exist or cannot be access.
+		if { ! [catch {glob -nocomplain -directory $d -- *} err] } {
+		    set DiskUtil(gtmpdir) $d
+		    break
+		}
+	    }
+	}
+	if { $DiskUtil(gtmpdir) == "" } {
+	    ${log}::error "Could not find a temporary directory!"
+	} else {
+	    ${log}::notice "Will use $DiskUtil(gtmpdir) as global \
+                            temporary directory"
+	}
+    }
+    return [::diskutil::double_backslash $DiskUtil(gtmpdir)]
+}
+
+
+proc ::diskutil::global_app_directory { { prgpath "" } { prgname "" } } {
+    variable DiskUtil
+    variable log
+
+    if { $prgpath == "" } {
+	# Make sure to actually store the program path in a local
+	# variable in case the path contained a "." and was therefore
+	# related to the current directory at start. This because,
+	# obviously, the current directory can change at any time!
+	if { $DiskUtil(dft_prgpath) == "" } {
+	    if { [info exists ::starkit::topdir] } {
+		set DiskUtil(dft_prgpath) [normalize $::starkit::topdir]
+	    } else {
+		set DiskUtil(dft_prgpath) [normalize $::argv0]
+	    }
+	    ${log}::info "Default program path is at $DiskUtil(dft_prgpath)"
+	}
+	set prgpath $DiskUtil(dft_prgpath)
+    }
+
+    if { $prgname eq "" } {
+	set prgname [file rootname [file tail $prgpath]]
+    }
+    set dir [file join [global_platform_tmp] $prgname]
+    if { [catch {file mkdir $dir} err] } {
+	${log}::error "Cannot create global storage for app at $dir: $err"
+	set dir ""
+    }
+    return $dir
+}
+
+
 # ::diskutil::concat_files --
 #
 #	Concatenate one or serveral files one after the other to
@@ -644,17 +736,33 @@ proc ::diskutil::concat_files { dst_file in_files } {
 # Arguments:
 #	fnames	(list of) file names.
 #	prgpath	Full path to program being used for %progdir% and %progname%
+#	dynamic	List of (dynamic) key and their values to also recognise
 #
 # Results:
 #	A modified (list of) file names
 #
 # Side Effects:
 #	None.
-proc ::diskutil::fname_resolv { fnames { prgpath "" } } {
+proc ::diskutil::fname_resolv { fnames { dynamic {} } { prgpath "" } } {
     global tcl_platform env
     variable DiskUtil
     variable log
+    
+    # Swap prgpath and dynamic if dynamic isn't a list which number of
+    # arguments can be divided by two, this is to ensure compatibility
+    # with older uses of this interface.
+    set ldyn [llength $dynamic]
+    if { $ldyn > 0 && [expr {$ldyn%2}] == 1 } {
+	foreach {prgpath dynamic} [list $dynamic $prgpath] break
+    }
 
+
+    # Start by insert dynamic and user keys, do this at ONCE to make
+    # sure they have precedence.
+    foreach {k v} $dynamic {
+	regsub -all "%${k}%" $fnames $v fnames
+    }
+    
     # Replace the content of any index in the tcl_platform array
     foreach name [array names tcl_platform] {
 	regsub -all "%${name}%" $fnames $tcl_platform($name) fnames
@@ -701,7 +809,7 @@ proc ::diskutil::fname_resolv { fnames { prgpath "" } } {
 	regsub -all "%LOCALAPPDATA%" $fnames "$DiskUtil(winemu_dir)/Local" \
 	    fnames
     }
-    
+
     return $fnames
 }
 
@@ -1123,7 +1231,12 @@ proc ::diskutil::lread { fname { divider -1 } { type "file" } } {
 	    if { $line ne "" } {
 		set firstchar [string index $line 0]
 		if { [string first $firstchar $DiskUtil(comments)] < 0 } {
-		    lappend vals $line
+		    # Allow to add empty values
+		    if { [lsearch -exact $DiskUtil(empty) $line] >= 0 } {
+			lappend vals ""
+		    } else {
+			lappend vals $line
+		    }
 		}
 	    }
 	}

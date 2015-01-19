@@ -24,25 +24,39 @@ namespace eval ::argutil {
     variable AU
     if { ! [info exists AU] } {
 	array set AU {
-	    levels      "debug info notice warn error critical"
+	    levels      {debug info notice warn error critical}
 	    loglevel    warn
 	    dft_outfd   stdout
 	    dateformat  "%d%m%y %H:%M:%S"
 	    extlog      ""
 	    outfailed   0
 	    vbs         "lnk2path.vbs"
+	    wsh         ""
 	    links_cache {}
 	    -maxlinks   10
-	    -autounwrap on
+	    -autounwrap off
 	    -tmpmake    32767
 	    -tmppfx     "tcltmp_"
 	    -packed     {.tm .zip .kit}
+	    -rootdirs   {%scriptdir% %progdir% %libdir%}
+	    -searchdirs {../../../lib ../../lib ../lib lib ../../.. ../.. .. .}
 	}
 	variable libdir [file dirname [file normalize [info script]]]
     }
 
     namespace export platform accesslib boolean makelist loadmodules \
 	initargs fix_outlog unwrap
+}
+
+
+proc ::argutil::configure { args } {
+    variable AU
+
+    foreach {k v} $args {
+	if { [lsearch [array names AU -*] $k] >= 0 } {
+	    set AU($k) $v
+	}
+    }
 }
 
 
@@ -81,8 +95,10 @@ proc ::argutil::readlnk { lnk } {
     set tgt ""
     if { [catch {package require tcom} err] == 0 } {
 	__log debug "'tcom' available trying failsafe method first"
-	set sh [::tcom::ref createobject "WScript.Shell"]
-	set lobj [$sh CreateShortcut [file nativename $lnk]]
+	if { $AU(wsh) eq "" } {
+	    set AU(wsh) [::tcom::ref createobject "WScript.Shell"]
+	}
+	set lobj [$AU(wsh) CreateShortcut [file nativename $lnk]]
 	set tgt [$lobj TargetPath]
 	__log info "'$lnk' points to '$tgt'"
 	if { $tgt ne "" } {
@@ -740,24 +756,17 @@ proc ::argutil::searchlib { libname paths { version "" } } {
 #	Modifies auto_path.
 proc ::argutil::accesslib { libname { version "" } { first 0 } } {
     global auto_path tcl_platform argv0
+    variable libdir
     variable AU
 
     # Build a list of library path from within which we should look
     # for a $libname sub directory.
-    set rootdirs [list \
-		      [file dirname [info script]] \
-		      [file dirname $argv0] \
-		      [info library]]
     set path_search {}
-    foreach rd $rootdirs {
-	foreach d [list [file join .. .. .. lib] \
-		       [file join .. .. lib] \
-		       [file join .. lib] \
-		       [file join lib] \
-		       [file join .. .. ..] \
-		       [file join .. ..] \
-		       [file join ..] \
-		       .] {
+    foreach rd $AU(-rootdirs) {
+	set rd [string map [list %scriptdir% $libdir \
+				%progdir% [file dirname $argv0] \
+				%libdir% [info library]] $rd]
+	foreach d $AU(-searchdirs) {
 	    lappend path_search [file join $rd $d]
 	}
     }
