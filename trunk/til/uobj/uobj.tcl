@@ -690,10 +690,10 @@ proc ::uobj::objectify { o commands } {
 	set passed 0
 	foreach cgrp {@c@} {
 	    foreach c $cgrp {
-		if { $cmd eq $c } {
+		if { $cmd eq [lindex $c 0] } {
 		    set passed 1
 		    return [eval [namespace current]::[lindex $cgrp 0] \
-				@o@ $args]
+				@o@ [lrange $c 1 end] $args]
 		}
 	    }
 	}
