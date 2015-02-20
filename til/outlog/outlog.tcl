@@ -10,7 +10,7 @@
 package require Tcl 8.2
 package require logger
 
-package provide outlog 1.0
+package provide outlog 1.1
 
 namespace eval ::outlog {
     # Variables of name outlog::__outlog_<id> are created as arrays to
@@ -77,7 +77,7 @@ proc ::outlog::loglevel { { loglvl "" } } {
 #
 # Side Effects:
 #	None.
-proc ::outlog::open { logfile { rotate -1 } { keep 4 } } {
+proc ::outlog::open { logfile { rotate -1 } { keep 4 } { maxsize -1 } } {
     variable OutLog
     variable log
 
@@ -118,6 +118,7 @@ proc ::outlog::open { logfile { rotate -1 } { keep 4 } } {
     }
     set Log(rotate) $rotate
     set Log(keep) $keep
+    set Log(maxsize) $maxsize
 
     lappend OutLog(logs) $id
 
@@ -211,12 +212,53 @@ proc ::outlog::puts { id line { norotation 0 } } {
 	lappend Log(accumulator) $line
     }
 
+    if { ! $norotation } {
+	rotate $id $now
+    }
+
+    return $outlines
+}
+
+
+proc ::outlog::rotate { id { now "" } } {
+    variable OutLog
+    variable log
+
+    # Check that this is one of our outlog objects.
+    set idx [lsearch $OutLog(logs) $id]
+    if { $idx < 0 } {
+	${log}::error "$id is not the identifier of an outlog!"
+	return 0
+    }
+    
+    # Get to the global that contains all necessary information
+    set varname "::outlog::__outlog_$id"
+    upvar \#0 $varname Log
+
+    if { $now eq "" } {
+	set now [clock seconds]
+    }
 
     # Now takes care of rotations when possible and requested.
-    if { $Log(fd) != "" && $Log(fd) != "stdout" && $Log(rotate) >= 0 \
-	 && ! $norotation } {
+    if { $Log(fd) != "" && $Log(fd) != "stdout" } {
+	set rotate 0
 	# We need to rotate, enough time has elapsed since start.
-	if { [expr $now - $Log(start)] >= [expr int($Log(rotate) * 3600)] } {
+	if { $Log(rotate) >= 0 } {
+	    set elapsed [expr $now - $Log(start)]
+	    if { $elapsed >= [expr int($Log(rotate) * 3600)] } {
+		${log}::info "Will rotate: $elapsed s. since last rotation."
+		set rotate 1
+	    }
+	}
+	if { !$rotate && $Log(maxsize) > 0 } {
+	    set sz [file size $Log(logfile)]
+	    if { $sz >= $Log(maxsize) } {
+		${log}::info "Will rotate: file is $sz bytes"
+		set rotate 1
+	    }
+	}
+
+	if { $rotate } {
 	    if { [catch "::close $Log(fd)"] == 0 } {
 		${log}::notice "Rotating log files for $Log(logfile)"
 		# Set the file descriptor to be empty, it will be
@@ -244,7 +286,7 @@ proc ::outlog::puts { id line { norotation 0 } } {
 				     && [file exists \
 					     "$Log(logfile).[expr $i+1]"] } {
 				if { $::tcl_platform(platform) == "unix" } {
-				    set cmd [list gzip \
+				    set cmd [list gzip -f \
 						 "$Log(logfile).[expr $i+1]" &]
 				    if { [catch [linsert $cmd 0 exec] err] } {
 					${log}::warn "Could not start gzip:\
@@ -279,11 +321,7 @@ proc ::outlog::puts { id line { norotation 0 } } {
 	    }
 	}
     }
-
-    return $outlines
 }
-
-
 
 # ::outlog::close --
 #
