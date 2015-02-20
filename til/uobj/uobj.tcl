@@ -830,29 +830,7 @@ proc ::uobj::find { ns type matches { within "" } } {
 }
 
 
-# ::uobj::new -- Create object identifier
-#
-#       This procedure creates the identifier for a pseudo object to
-#       be created in the namespace passed as a parameter.  The
-#       identifier contains the type of the object, which might be
-#       created "within" another object, i.e. within the context of
-#       the id of another object.  Uniqueness of identifiers is
-#       guaranteed through the usage of an id generator which is
-#       specific to each namespace.
-#
-# Arguments:
-#       ns	Namespace to create identifier in
-#       type	Type of the object.
-#       within	List of ids (as in incremented int) of container object
-#       id	Force object identifier, ensure they are UNIQUE within the ns!
-#
-# Results:
-#       Return a fully qualified name that can be used in the caller
-#       namespace.
-#
-# Side Effects:
-#       None.
-proc ::uobj::new { ns type { within "" } { id "" } } {
+proc ::uobj::__generate { ns type { within "" } { id "" } } {
     variable IDGENE
     variable log
 
@@ -879,9 +857,49 @@ proc ::uobj::new { ns type { within "" } { id "" } } {
     } else {
 	set o "::${ns}::${type}_[join $within _]_$id"
     }
-    set o [string map [list :::: ::] $o]
-    if { [info vars $o] eq "" } {
+    return [string map [list :::: ::] $o]
+}
+
+
+# ::uobj::new -- Create object identifier
+#
+#       This procedure creates the identifier for a pseudo object to
+#       be created in the namespace passed as a parameter.  The
+#       identifier contains the type of the object, which might be
+#       created "within" another object, i.e. within the context of
+#       the id of another object.  Uniqueness of identifiers is
+#       guaranteed through the usage of an id generator which is
+#       specific to each namespace.
+#
+# Arguments:
+#       ns	Namespace to create identifier in
+#       type	Type of the object.
+#       within	List of ids (as in incremented int) of container object
+#       id	Force object identifier, ensure they are UNIQUE within the ns!
+#
+# Results:
+#       Return a fully qualified name that can be used in the caller
+#       namespace.
+#
+# Side Effects:
+#       None.
+proc ::uobj::new { ns type { within "" } { id "" } } {
+    variable IDGENE
+    variable log
+
+    if { $id eq "" } {
+	# Generate a new identifier until we find a free one.
+	set o [__generate $ns $type $within]
+	while { [info exists $o] } {
+	    set o [__generate $ns $type $within]
+	}
 	${log}::debug "Creating object $o"
+    } else {
+	# Forced ID, accept the way that things are.
+	set o [__generate $ns $type $within $id]
+	if { [info exists $o] eq "" } {
+	    ${log}::debug "Creating object $o"
+	}
     }
     return $o
 }
