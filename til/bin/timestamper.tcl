@@ -44,7 +44,8 @@ set options {
     { ignorepreformat "Should we skip timestamping of preformatted lines?" }
     { endoneof "Should we die ourselves when eof has been detected?" }
     { rotate.double "168" "Number of hours before rotating, negative to switch off" }
-    { keep.integer "4" "How many log files should we keep when rotating?" }
+    { keep.integer "6" "How many log files should we keep when rotating?" }
+    { maxsize.integer "134217728" "Maximum size of output files" }
     { outfile.arg "stdout" "Output file, empty means stdout" }
     { infile.arg "stdin" "Input file" }
     { dateformat.arg "\[%d%m%y %H:%M:%S\] " "Date format to prepend to lines" }
@@ -139,7 +140,7 @@ proc log_out { wid line } {
 }
 
 
-set TS(outid) [::outlog::open $TS(outfile) $TS(rotate) $TS(keep)]
+set TS(outid) [::outlog::open $TS(outfile) $TS(rotate) $TS(keep) $TS(maxsize)]
 set TS(lid) [::logwatch::new $TS(infile) log_out]
 if { $TS(endoneof) } {
 	::logwatch::oneof $TS(lid) "exit"
