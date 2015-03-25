@@ -503,6 +503,7 @@ proc ::minihttpd::__starve { port sock } {
 	    set varname "::minihttpd::Client_${port}_${sock}"
 	    upvar \#0 $varname Client
 
+	    fconfigure $sock -translation binary
 	    if { [eof $sock] } {
 		__push $port $sock
 	    }
@@ -512,10 +513,13 @@ proc ::minihttpd::__starve { port sock } {
 	    } else {
 		append Client(data) $data
 		if { [array names Client mime,content-length] != "" } {
-		    if { [string length $Client(data)] \
-			     >= $Client(mime,content-length) } {
+		    set len [string length $Client(data)]
+		    if { $len >= $Client(mime,content-length) } {
 			__push $port $sock
 		    }
+		} elseif { $data eq "" } {
+		    # There wasn't anything to read anymore
+		    __push $port $sock
 		}
 	    }
 	}
@@ -582,7 +586,6 @@ proc ::minihttpd::__pull { port sock } {
 		
 		set state \
 		    [string compare $readCount 0],$Client(state),$Client(proto)
-		#puts "REQ: $line ==> STATE: $state"
 		switch -- $state {
 		    0,mime,GET  -
 		    0,mime,HEAD -
@@ -1051,6 +1054,7 @@ proc ::minihttpd::__push { port sock } {
 		    if { [catch {eval [linsert $cb end $port $sock $Client(url) $Client(query)]} res] } {
 			__push_error $port $sock 400 \
 			    "Error when executing internal handler: $res"
+			return
 		    } else {
 			set Client(handler) $ptn
 			set Client(response) $res
